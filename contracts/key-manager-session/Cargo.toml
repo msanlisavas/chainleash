@@ -1,0 +1,21 @@
+[package]
+name = "key-manager-session"
+version = "0.1.0"
+edition = "2021"
+description = "One-time session code to configure CHAINLEASH weighted keys (agent low-weight + human high-weight, key_management threshold above agent weight)."
+
+[[bin]]
+name = "key_manager"
+path = "src/main.rs"
+bench = false
+doctest = false
+test = false
+
+[dependencies]
+casper-contract = "5.1.1"
+casper-types = "6.1.0"  # must match the casper-types that casper-contract 5.1.1 uses
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
