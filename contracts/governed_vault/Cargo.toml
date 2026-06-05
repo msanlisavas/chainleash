@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 odra = { version = "2.7.0", features = [], default-features = false }
+odra-casper-livenet-env = { version = "2.7.0", optional = true }
 
 [dev-dependencies]
 odra-test = { version = "2.7.0", features = [], default-features = false }
@@ -30,6 +31,15 @@ test = false
 name = "governed_vault_cli"
 path = "bin/cli.rs"
 test = false
+
+[[bin]]
+name = "governed_vault_livenet"
+path = "bin/governed_vault_livenet.rs"
+required-features = ["livenet"]
+test = false
+
+[features]
+livenet = ["odra-casper-livenet-env"]
 
 [profile.release]
 codegen-units = 1

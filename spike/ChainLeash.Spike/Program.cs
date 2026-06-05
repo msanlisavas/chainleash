@@ -40,6 +40,8 @@ switch (command)
     case "keygen": Keygen(); break;
     case "smoke": await Smoke(); break;
     case "balance": await Balance(); break;
+    case "account-hash": AccountHashes(); break;
+    case "vault-tighten": await VaultTighten(); break;
     case "setup-keys": await SetupKeys(); break;
 
     case "attempt-overreach": await AttemptOverreach(); break;
@@ -284,9 +286,70 @@ async Task<(string motes, int dep, int km, string hash)> AccountState(HttpClient
         d.GetProperty("account_hash").GetString()!);
 }
 
+// Print the agent + human account hashes (used as the vault agent/owner addresses).
+void AccountHashes()
+{
+    foreach (var name in new[] { "agent", "human" })
+    {
+        var hex = File.ReadAllText(Path.Combine("secrets", name, "public_key_hex")).Trim();
+        var pk = PublicKey.FromHexString(hex);
+        Console.WriteLine($"{name,-6} {pk.GetAccountHash()}");
+    }
+}
+
+// Call tighten_cap on the deployed GovernedVault (agent-authorized, emits CapTightened).
+// usage: vault-tighten <contract-hash> [newCapMotes]
+async Task VaultTighten()
+{
+    var cfg = Config();
+    if (args.Length < 2) { Console.WriteLine("usage: vault-tighten <contract-hash> [newCapMotes]"); return; }
+    var contractHash = args[1];
+    var newCap = args.Length > 2 ? ulong.Parse(args[2]) : 1_000_000_000UL;
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByHash(contractHash)
+        .EntryPoint("tighten_cap")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("new_cap", CLValue.U512(newCap)) })
+        .From(agentKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1)
+        .Build();
+    tx.Sign(agentKp);
+
+    var client = Rpc(cfg);
+    Console.WriteLine($"Calling tighten_cap(new_cap={newCap}) on {contractHash}...");
+    try
+    {
+        await client.PutTransaction(tx);
+        Console.WriteLine($"tx: {tx.Hash}");
+        Console.WriteLine($"https://testnet.cspr.live/transaction/{tx.Hash}");
+    }
+    catch (Exception ex) { Console.WriteLine($"REJECTED: {ex.Message}"); return; }
+
+    for (int i = 1; i <= 24; i++)
+    {
+        await Task.Delay(5000);
+        try
+        {
+            var er = (await client.GetTransaction(tx.Hash, System.Threading.CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+            if (er is not null)
+            {
+                Console.WriteLine($"EXECUTED IsSuccess={er.IsSuccess} cost={er.Cost}");
+                if (!er.IsSuccess) Console.WriteLine($"  err: {er.ErrorMessage}");
+                else Console.WriteLine("  OK CapTightened emitted — stored-contract call works.");
+                return;
+            }
+            Console.WriteLine($"  [{i * 5,3}s] pending...");
+        }
+        catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
+    }
+    Console.WriteLine("Timed out.");
+}
+
 void Help()
 {
     Console.WriteLine("CHAINLEASH spike harness — commands:");
-    Console.WriteLine("  keygen   smoke   balance   setup-keys   attempt-overreach   cosign-op   help");
+    Console.WriteLine("  keygen  smoke  balance  account-hash  setup-keys  attempt-overreach  cosign-op  help");
     Console.WriteLine("Run:  dotnet run -- <command>");
 }
