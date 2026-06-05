@@ -42,12 +42,9 @@ switch (command)
     case "balance": await Balance(); break;
     case "setup-keys": await SetupKeys(); break;
 
-    // Implemented next, after Spike A lands (Plan 1, Tasks 4-5).
-    case "attempt-overreach":
-    case "cosign-op":
-        Console.WriteLine($"[{command}] Spike experiment not yet implemented — see Plan 1.");
-        Console.WriteLine("We implement this live against testnet and record the network response.");
-        break;
+    case "attempt-overreach": await AttemptOverreach(); break;
+
+    case "cosign-op": await CosignOp(); break;
 
     default: Help(); break;
 }
@@ -157,6 +154,119 @@ async Task SetupKeys()
         catch (Exception ex) { Console.WriteLine($"  poll error: {ex.Message}"); }
     }
     Console.WriteLine("Timed out — inspect the tx on cspr.live for the execution result.");
+}
+
+// --- [Spike B] attempt-overreach: agent (weight 1) tries to lower its own key_management threshold ---
+async Task AttemptOverreach()
+{
+    var cfg = Config();
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+    var wasmPath = cfg["OverreachWasmPath"]
+        ?? "../../contracts/overreach-session/target/wasm32-unknown-unknown/release/overreach.wasm";
+    if (!File.Exists(wasmPath)) { Console.WriteLine($"wasm not found: {wasmPath} — build the contract first."); return; }
+    var wasm = File.ReadAllBytes(wasmPath);
+
+    var tx = new Transaction.SessionBuilder()
+        .From(agentKp.PublicKey)
+        .Wasm(wasm)
+        .RuntimeArgs(new List<NamedArg>())
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1)
+        .Build();
+    tx.Sign(agentKp); // ONLY the agent (weight 1) signs — below the key_management threshold of 3
+
+    var client = Rpc(cfg);
+    Console.WriteLine("Agent (weight 1) attempts to lower its OWN key_management threshold to 1 (unleash)...");
+    try
+    {
+        await client.PutTransaction(tx);
+        Console.WriteLine($"Accepted into the network. tx: {tx.Hash}");
+        Console.WriteLine($"Inspect: https://testnet.cspr.live/transaction/{tx.Hash}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"RESULT: PRE-INCLUSION REJECT (not an on-chain tx) — {ex.Message}");
+        return;
+    }
+
+    Console.WriteLine("Polling for the execution result...");
+    for (int i = 1; i <= 24; i++)
+    {
+        await Task.Delay(5000);
+        try
+        {
+            var res = (await client.GetTransaction(tx.Hash, System.Threading.CancellationToken.None)).Parse();
+            var er = res.ExecutionInfo?.ExecutionResult;
+            if (er is not null)
+            {
+                Console.WriteLine($"RESULT: EXECUTED on-chain (block {res.ExecutionInfo!.BlockHeight}) — IsSuccess={er.IsSuccess}");
+                Console.WriteLine($"  cost={er.Cost}, consumed={er.Consumed}");
+                if (!er.IsSuccess) Console.WriteLine($"  error_message: {er.ErrorMessage}");
+                Console.WriteLine(er.IsSuccess
+                    ? "  WARNING the agent SUCCEEDED — the leash FAILED (unexpected!)"
+                    : "  OK EXECUTED-FAILED: the protocol rejected the over-reach. The rejection IS a real on-chain artifact.");
+                return;
+            }
+            Console.WriteLine($"  [{i * 5,3}s] accepted, not yet executed...");
+        }
+        catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
+    }
+    Console.WriteLine("Timed out waiting for execution — check cspr.live.");
+}
+
+// --- [Spike C] cosign-op: human key (weight 3) performs a key-management op the agent cannot ---
+async Task CosignOp()
+{
+    var cfg = Config();
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var accountPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim());
+
+    var wasmPath = cfg["CosignWasmPath"]
+        ?? "../../contracts/cosign-proof-session/target/wasm32-unknown-unknown/release/cosign_proof.wasm";
+    if (!File.Exists(wasmPath)) { Console.WriteLine($"wasm not found: {wasmPath}"); return; }
+    var wasm = File.ReadAllBytes(wasmPath);
+
+    var tx = new Transaction.SessionBuilder()
+        .From(accountPk)             // the treasury account identity (agent pubkey)
+        .Wasm(wasm)
+        .RuntimeArgs(new List<NamedArg>())
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1)
+        .Build();
+    tx.Sign(humanKp);                // signed by the HUMAN associated key (weight 3) ONLY
+
+    var client = Rpc(cfg);
+    Console.WriteLine("Human key (weight 3) performs a key-management op the agent was just denied...");
+    try
+    {
+        await client.PutTransaction(tx);
+        Console.WriteLine($"Accepted. tx: {tx.Hash}");
+        Console.WriteLine($"Inspect: https://testnet.cspr.live/transaction/{tx.Hash}");
+    }
+    catch (Exception ex) { Console.WriteLine($"PutTransaction REJECTED: {ex.Message}"); return; }
+
+    Console.WriteLine("Polling for the execution result...");
+    for (int i = 1; i <= 24; i++)
+    {
+        await Task.Delay(5000);
+        try
+        {
+            var res = (await client.GetTransaction(tx.Hash, System.Threading.CancellationToken.None)).Parse();
+            var er = res.ExecutionInfo?.ExecutionResult;
+            if (er is not null)
+            {
+                Console.WriteLine($"RESULT: EXECUTED (block {res.ExecutionInfo!.BlockHeight}) — IsSuccess={er.IsSuccess}");
+                if (!er.IsSuccess) Console.WriteLine($"  error_message: {er.ErrorMessage}");
+                Console.WriteLine(er.IsSuccess
+                    ? "  OK Human co-sign authorized key management — weighted multi-sig works."
+                    : "  WARNING Human op failed (unexpected).");
+                return;
+            }
+            Console.WriteLine($"  [{i * 5,3}s] accepted, not yet executed...");
+        }
+        catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
+    }
+    Console.WriteLine("Timed out.");
 }
 
 // --- helpers ---

@@ -1,0 +1,21 @@
+[package]
+name = "cosign-proof-session"
+version = "0.1.0"
+edition = "2021"
+description = "Spike C: the human key (weight 3, meets key_management threshold) performs a key-management op the agent cannot — proves the co-sign authority."
+
+[[bin]]
+name = "cosign_proof"
+path = "src/main.rs"
+bench = false
+doctest = false
+test = false
+
+[dependencies]
+casper-contract = "5.1.1"
+casper-types = "6.1.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"

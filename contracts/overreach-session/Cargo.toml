@@ -1,0 +1,21 @@
+[package]
+name = "overreach-session"
+version = "0.1.0"
+edition = "2021"
+description = "Spike B: the agent (below key_management threshold) attempts to lower its own key_management threshold — the protocol must reject it."
+
+[[bin]]
+name = "overreach"
+path = "src/main.rs"
+bench = false
+doctest = false
+test = false
+
+[dependencies]
+casper-contract = "5.1.1"
+casper-types = "6.1.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
