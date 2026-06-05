@@ -1,6 +1,10 @@
-# CHAINLEASH
+<p align="center">
+  <img src="logo.png" alt="CHAINLEASH" width="160" />
+</p>
 
-> Controlled autonomy the chain enforces — auditable per decision.
+<h1 align="center">CHAINLEASH</h1>
+
+<p align="center"><em>Controlled autonomy the chain enforces — auditable per decision.</em></p>
 
 CHAINLEASH is a bonded, protocol-governed autonomous **AI treasury agent** on the
 Casper Network. An AI agent manages a tokenized-T-bill treasury under spending
