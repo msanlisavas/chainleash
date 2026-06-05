@@ -1,0 +1,31 @@
+# Rust / Odra
+contracts/**/target/
+**/Cargo.lock
+*.wasm
+
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+
+# Node / Angular
+node_modules/
+frontend/dist/
+
+# OS / tooling junk
+*.stackdump
+Thumbs.db
+.DS_Store
+
+# Secrets & keys
+**/secrets/
+*.pem
+*.private.key
+spike/**/Config/*.local.json
+.env
+
+# Claude Code / AI planning artifacts — keep LOCAL, never publish
+docs/superpowers/
+.claude/
+CLAUDE.md
+.claude-*
