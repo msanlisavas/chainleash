@@ -7,6 +7,9 @@ contracts/**/target/
 [Bb]in/
 [Oo]bj/
 *.user
+# ...but the Odra contract bin/ holds source build scripts (not .NET output) — keep it
+!contracts/**/bin/
+!contracts/**/bin/**
 
 # Node / Angular
 node_modules/
