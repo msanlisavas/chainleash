@@ -1,6 +1,6 @@
 {
   "_comment": "Copy this file to settings.local.json (gitignored) and fill in real values.",
-  "NodeRpcUrl": "https://node.testnet.casper.network/rpc",
+  "NodeRpcUrl": "https://node.testnet.cspr.cloud/rpc",
   "CsprCloudBaseUrl": "https://api.testnet.cspr.cloud",
   "CsprCloudAccessKey": "<your-cspr-cloud-testnet-key>",
   "ChainName": "casper-test",
