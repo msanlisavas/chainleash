@@ -22,9 +22,10 @@ not public key), so the per-action cap and validator allowlist are **fully chain
 ## Entry points
 
 **Agent (capped + allowlisted, chain-rejected otherwise):**
-`delegate`, `undelegate`, `redelegate`, `propose_material`, `deposit_bond`.
+`delegate`, `undelegate`, `redelegate`, `propose_material`, `deposit_bond`, and
+`tighten_cap` (the agent may only *lower* its own cap, never raise it).
 
-**Owner:** `approve_material`, `tighten_cap` / `raise_cap`, `set_validator`, `set_paused`
+**Owner:** `approve_material`, `raise_cap`, `set_validator`, `set_paused`
 (kill-switch), `set_max_per_validator`, `set_action_interval`, `record_violation`,
 `slash_bond`, `return_bond`, `withdraw`, `transfer_ownership`, `set_agent`.
 

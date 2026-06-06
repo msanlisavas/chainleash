@@ -345,7 +345,7 @@ async Task VaultInit()
     tx.Sign(agentKp);
 
     var client = Rpc(cfg);
-    Console.WriteLine("Initializing GovernedVault (agent, owner, value_cap=2 CSPR)...");
+    Console.WriteLine($"Initializing GovernedVault (agent, owner, value_cap={capMotes / 1_000_000_000m:N0} CSPR)...");
     try { await client.PutTransaction(tx); Console.WriteLine($"tx: {tx.Hash}\nhttps://testnet.cspr.live/transaction/{tx.Hash}"); }
     catch (Exception ex) { Console.WriteLine($"REJECTED: {ex.Message}"); return; }
 

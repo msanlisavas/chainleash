@@ -70,7 +70,10 @@ cap, allowlist, bond, and policy params differ. Each holder runs **their own vau
 and standing one up is **one command**:
 
 ```powershell
-./scripts/onboard.ps1 -CapCspr 600 -Validators @('0106618e…','017d96b9…') -DepositCspr 1000 -BondCspr 300
+./scripts/onboard.ps1 -CapCspr 600 `
+  -Validators @('0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981',
+                '017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e') `
+  -DepositCspr 1000 -BondCspr 300
 ```
 
 That deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms the
@@ -115,8 +118,8 @@ enforced on the material path too; the cap uses a lag-free in-contract accumulat
 and **returnable**; and ownership/agent keys are **recoverable** (`transfer_ownership`
 / `set_agent`). 26/26 contract tests with regression coverage for each fix.
 
-Earlier artifacts (autonomous policy-breach exit, non-allowlisted rejection, weighted-key
-over-reach) are catalogued in the deploy notes.
+Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted
+rejection, and a weighted-key over-reach attempt being blocked.
 
 ## How the agent works
 
@@ -137,19 +140,41 @@ opaque discretion — so the policy is deterministic and every decision is on-ch
 
 ## Run it
 
-The whole stack runs with Docker:
+There are two ways to run, depending on whether you want to **watch** the live vault or
+**drive your own**.
+
+**1. Observer mode — watch the live demo vault (zero setup):**
 
 ```bash
-cp .env.example .env        # set CSPR_CLOUD_KEY (defaults point at the live demo vault)
+cp .env.example .env        # defaults point at the live demo vault + public testnet key
 docker compose up --build
 ```
 
-Dashboard + API at `http://localhost:5179`, the x402 signal provider at `:5080`, and a
-`GET /health` endpoint that reports chain reachability, the agent's gas balance, and a
-**low-gas warning**. The agent's audit feed is **persisted**, so it survives restarts.
-Secrets are mounted read-only — never baked into an image. (For local dev without Docker:
-run `backend/ChainLeash.SignalProvider` then `backend/ChainLeash.Agent` with
-`dotnet run`; the agent serves the prebuilt dashboard from `wwwroot`.)
+With no agent key present, the agent boots **read-only**: it streams the live demo vault's
+leash state (cap, bond, balances, validators) to the dashboard but signs nothing. Dashboard
++ API at `http://localhost:5179`, signal provider at `:5080`, and `GET /health` reports
+chain reachability + `readOnly: true`. This is the fastest way to see CHAINLEASH live —
+note the demo vault is bound on-chain to *my* agent key, so **only its owner can drive it**.
+
+**2. Drive your own vault (to see the agent actually act):**
+
+To watch the agent delegate/redelegate/escalate, deploy your **own** vault — its agent key
+is yours, so the chain accepts its moves:
+
+```powershell
+# 1) generate keys, fund BOTH at the faucet (~600+ CSPR for the agent: ~500 is install gas)
+cd spike/ChainLeash.Spike; dotnet run -- keygen
+#    faucet: https://testnet.cspr.live/tools/faucet  (you may need several requests)
+# 2) put your CSPR.cloud key in spike/.../Config/settings.local.json, then deploy + arm:
+./scripts/onboard.ps1 -CapCspr 600 -Validators @('<validatorHex>') -DepositCspr 1000 -BondCspr 300
+# 3) run the stack — it now points at YOUR vault
+docker compose up --build
+```
+
+The agent's audit feed is **persisted** across restarts, and secrets are mounted read-only —
+never baked into an image. (Local dev without Docker: run `backend/ChainLeash.SignalProvider`
+then `backend/ChainLeash.Agent` with `dotnet run`; the agent serves the dashboard from
+`wwwroot`.) Full details — including faucet/gas budget — are in the [RUNBOOK](RUNBOOK.md).
 
 ## Architecture
 

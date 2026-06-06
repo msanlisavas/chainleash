@@ -11,7 +11,11 @@ demo. Everything runs against **Casper 2.0 testnet**.
   doesn't host-compile on Windows; we build it in a Linux container)
 - A **CSPR.cloud** access key (node RPC + REST) — the public testnet key works for dev
 - Two funded testnet keys: an **agent** key and a **human/owner** key (faucet:
-  <https://testnet.cspr.live/tools/faucet>)
+  <https://testnet.cspr.live/tools/faucet>). Budget to deploy + run your own vault:
+  the **agent** needs **~600+ CSPR** (≈500 is the install-gas ceiling, plus per-call gas
+  and what you deposit/bond) and the **owner** ~50+ CSPR for co-sign gas. A single faucet
+  drip may not cover the install — request a few times. (Gas limits are ceilings; Casper
+  2.0 only charges what's actually consumed, but you must *hold* the limit to submit.)
 - For the in-wallet co-sign: **Casper Wallet** with the owner key imported, and
   (optionally) a **CSPR.click** appId from <https://console.cspr.click> (the public
   `csprclick-template` appId works for local testing)
