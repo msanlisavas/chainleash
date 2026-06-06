@@ -502,7 +502,10 @@ async Task VaultState()
     {
         var body = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method, @params = prms });
         var resp = await http.PostAsync(node, new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var text = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode) // e.g. 429 returns a non-JSON body — don't choke on it
+            throw new Exception($"RPC {method}: HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} — {text.Trim()}");
+        var doc = JsonDocument.Parse(text);
         if (doc.RootElement.TryGetProperty("error", out var err))
             throw new Exception($"RPC {method}: {err.GetProperty("message").GetString()}");
         return doc.RootElement.GetProperty("result").Clone();

@@ -117,13 +117,21 @@ Selected on-chain artifacts (click to verify):
 
 ### Security-reviewed
 
-I ran two adversarial multi-agent reviews (a leash-invariant red-team and a
-completion audit) and fixed every finding. The initializer is an installer-gated
-`init` constructor (no front-run window); the per-validator cap + kill-switch are
-enforced on the material path too; the cap uses a lag-free in-contract accumulator;
-`withdraw` reserves the bond; the bond is genuinely **slashable** (forfeit to owner)
-and **returnable**; and ownership/agent keys are **recoverable** (`transfer_ownership`
-/ `set_agent`). 26/26 contract tests with regression coverage for each fix.
+I ran three adversarial multi-agent reviews (a leash-invariant red-team, a completion
+audit, and a full security + quality review) and fixed every finding. The last review
+landed **0 critical / 0 high** and independently verified the core guarantee: a fully
+compromised agent can mis-delegate within the leash but has **no path to move CSPR out
+of the vault** — every exit is owner-gated and `withdraw` reserves the bond.
+
+On-chain: installer-gated `init` (no front-run window); the per-validator cap + kill-switch
+are enforced on the material path too; a lag-free in-contract accumulator; the agent's
+undelegate/redelegate are bounded by what it actually directed (a compromised agent can't
+even grief positions into unbonding); the bond is genuinely **slashable** and **returnable**;
+ownership/agent keys are **recoverable**. Off-chain: the API locks CORS to the dashboard
+origin, rate-limits the public endpoints, makes the co-sign confirm single-use + fail-closed
+(a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback
+off-by-default + fail-closed. **31 contract tests + 37 backend tests**, with regression
+coverage for each fix.
 
 Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted
 rejection, and a weighted-key over-reach attempt being blocked.
