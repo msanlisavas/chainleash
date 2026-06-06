@@ -66,6 +66,12 @@ pub struct Undelegated {
     pub amount: U512,
 }
 #[odra::event]
+pub struct Redelegated {
+    pub from: PublicKey,
+    pub to: PublicKey,
+    pub amount: U512,
+}
+#[odra::event]
 pub struct MaterialProposed {
     pub id: u32,
     pub validator: PublicKey,
@@ -161,6 +167,19 @@ impl GovernedVault {
         self.assert_within_cap(amount);
         self.env().undelegate(validator.clone(), amount);
         self.env().emit_event(Undelegated { validator, amount });
+    }
+
+    /// Routine autonomous REDELEGATION — move stake from one validator straight to
+    /// another in a single tx, with NO unbonding wait (so no missed rewards). Capped,
+    /// and the DESTINATION validator must be allowlisted (you're free to leave any
+    /// validator, but may only move INTO an approved one). Odra 2.7 doesn't wrap the
+    /// auction's redelegate, so we call it directly from the vault's own purse.
+    pub fn redelegate(&mut self, validator: PublicKey, new_validator: PublicKey, amount: U512) {
+        self.assert_agent();
+        self.assert_within_cap(amount);
+        self.assert_validator_allowed(&new_validator);
+        self.do_redelegate(validator.clone(), new_validator.clone(), amount);
+        self.env().emit_event(Redelegated { from: validator, to: new_validator, amount });
     }
 
     /// Agent proposes an over-cap (material) (un)delegation; executes only after
@@ -281,6 +300,29 @@ impl GovernedVault {
             self.env().revert(Error::ValidatorNotAllowed);
         }
     }
+
+    /// Invoke the Casper auction's native `redelegate` from the vault's main purse.
+    /// Odra 2.7 wraps delegate/undelegate but not redelegate, so we call the system
+    /// auction directly — mirroring Odra's own delegate host function.
+    #[cfg(target_arch = "wasm32")]
+    fn do_redelegate(&self, validator: PublicKey, new_validator: PublicKey, amount: U512) {
+        use casper_contract::contract_api::{runtime, system};
+        use odra::casper_types::{system::auction, RuntimeArgs, URef};
+        let purse: URef = runtime::get_key("__contract_main_purse")
+            .and_then(|k| k.as_uref().copied())
+            .unwrap_or_revert_with(self, Error::NotInitialized);
+        let auction_hash = system::get_auction();
+        let mut args = RuntimeArgs::new();
+        args.insert(auction::ARG_DELEGATOR_PURSE, purse).unwrap();
+        args.insert(auction::ARG_VALIDATOR, validator).unwrap();
+        args.insert(auction::ARG_NEW_VALIDATOR, new_validator).unwrap();
+        args.insert(auction::ARG_AMOUNT, amount).unwrap();
+        runtime::call_contract::<U512>(auction_hash, auction::METHOD_REDELEGATE, args);
+    }
+
+    /// The OdraVM test backend has no auction; the real redelegate is verified on testnet.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn do_redelegate(&self, _validator: PublicKey, _new_validator: PublicKey, _amount: U512) {}
 }
 
 #[cfg(test)]
@@ -343,6 +385,39 @@ mod tests {
         let (env, mut vault, _a, owner, v1, _v2) = setup();
         env.set_caller(owner);
         assert_eq!(vault.try_delegate(v1, u(500)), Err(Error::NotAgent.into()));
+    }
+
+    #[test]
+    fn redelegate_under_cap_to_allowed_new_validator() {
+        // The OdraVM backend has no auction, so do_redelegate is a no-op here; this
+        // verifies the guard chain + event path. The real move is verified on testnet.
+        let (env, mut vault, agent, owner, v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        vault.redelegate(v1, v2, u(500));
+    }
+
+    #[test]
+    fn redelegate_over_cap_reverts() {
+        let (env, mut vault, agent, _o, v1, v2) = setup();
+        env.set_caller(agent);
+        assert_eq!(vault.try_redelegate(v1, v2, u(1001)), Err(Error::OverCap.into()));
+    }
+
+    #[test]
+    fn redelegate_to_unapproved_new_validator_reverts() {
+        let (env, mut vault, agent, _o, v1, v2) = setup();
+        env.set_caller(agent);
+        // v2 is not allowlisted in setup → moving INTO it is rejected.
+        assert_eq!(vault.try_redelegate(v1, v2, u(500)), Err(Error::ValidatorNotAllowed.into()));
+    }
+
+    #[test]
+    fn redelegate_by_non_agent_reverts() {
+        let (env, mut vault, _a, owner, v1, v2) = setup();
+        env.set_caller(owner);
+        assert_eq!(vault.try_redelegate(v1, v2, u(500)), Err(Error::NotAgent.into()));
     }
 
     #[test]

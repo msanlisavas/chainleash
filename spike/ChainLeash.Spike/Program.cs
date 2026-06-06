@@ -49,6 +49,7 @@ switch (command)
     case "vault-deposit": await VaultDeposit(); break;
     case "vault-delegate": await VaultDelegate(); break;
     case "vault-undelegate": await VaultUndelegate(); break;
+    case "vault-redelegate": await VaultRedelegate(); break;
     case "vault-propose": await VaultPropose(); break;
     case "vault-approve": await VaultApprove(); break;
     case "fund": await Fund(); break;
@@ -598,6 +599,36 @@ async Task VaultUndelegate()
         .Build();
     tx.Sign(agentKp);
     await Submit(Rpc(cfg), tx, $"Agent undelegates {motes / 1_000_000_000m:N0} CSPR from {args[2][..12]}… (unbonds back to vault)");
+}
+
+// Agent moves stake straight from one validator to another in a single tx — NO
+// unbonding wait (so no missed rewards). Destination must be allowlisted; ≤ cap.
+// usage: vault-redelegate <package-hash> <fromValidatorHex> <toValidatorHex> <motes>
+async Task VaultRedelegate()
+{
+    var cfg = Config();
+    if (args.Length < 5) { Console.WriteLine("usage: vault-redelegate <package-hash> <fromHex> <toHex> <motes>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var from = PublicKey.FromHexString(args[2]);
+    var to = PublicKey.FromHexString(args[3]);
+    var motes = ulong.Parse(args[4]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("redelegate")
+        .RuntimeArgs(new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(from)),
+            new NamedArg("new_validator", CLValue.PublicKey(to)),
+            new NamedArg("amount", CLValue.U512(motes)),
+        })
+        .From(agentKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(30_000_000_000UL, 1)
+        .Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Agent redelegates {motes / 1_000_000_000m:N0} CSPR {args[2][..10]}… → {args[3][..10]}… (no unbonding)");
 }
 
 // Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed,
