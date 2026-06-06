@@ -55,6 +55,36 @@ public sealed class CasperVault
     public Task<TxResult> TightenCap(ulong newCapMotes) =>
         Call("tighten_cap", new List<NamedArg> { new NamedArg("new_cap", CLValue.U512(newCapMotes)) });
 
+    /// Owner co-signs and executes a pending material proposal. Signed by the HUMAN
+    /// key (the dashboard "Co-sign" action). In production this signature comes from
+    /// the owner's wallet via CSPR.click rather than a server-held key.
+    public async Task<TxResult> ApproveMaterial(uint id)
+    {
+        var humanPath = _cfg["Casper:HumanSecretKeyPath"];
+        if (string.IsNullOrWhiteSpace(humanPath)) return new TxResult("", false, "no human key configured");
+        var humanKp = KeyPair.FromPem(humanPath);
+
+        var tx = new Transaction.ContractCallBuilder()
+            .ByPackageHash(_pkg, null, null)
+            .EntryPoint("approve_material")
+            .RuntimeArgs(new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) })
+            .From(humanKp.PublicKey)
+            .ChainName(_cfg["Casper:ChainName"]!)
+            .Payment(30_000_000_000UL, 1)
+            .Build();
+        tx.Sign(humanKp);
+
+        var client = Rpc();
+        await client.PutTransaction(tx);
+        for (var i = 0; i < 24; i++)
+        {
+            await Task.Delay(5000);
+            var er = (await client.GetTransaction(tx.Hash, CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+            if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
+        }
+        return new TxResult(tx.Hash, false, "timeout");
+    }
+
     private async Task<TxResult> Call(string entryPoint, List<NamedArg> args, ulong paymentMotes = 5_000_000_000UL)
     {
         var tx = new Transaction.ContractCallBuilder()

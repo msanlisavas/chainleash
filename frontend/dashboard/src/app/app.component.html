@@ -1,0 +1,85 @@
+@let s = state();
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⛓️</span>
+    <div>
+      <h1>CHAINLEASH</h1>
+      <p>Controlled autonomy the chain enforces — auditable per decision.</p>
+    </div>
+  </div>
+  <div class="status">
+    <span class="dot" [class.on]="connected()"></span>
+    <span>{{ connected() ? 'live' : 'connecting…' }}</span>
+    @if (s) { <a class="pkg" href="https://testnet.cspr.live/contract-package/{{ s.packageHash }}" target="_blank">vault {{ short(s.packageHash) }}</a> }
+  </div>
+</header>
+
+<section class="stats">
+  <div class="card"><span class="label">Per-action cap</span><span class="value">{{ s?.capCspr ?? '—' }} <em>CSPR</em></span></div>
+  <div class="card"><span class="label">Policy</span><span class="value">commission ≤ {{ s?.maxCommissionPercent ?? '—' }}<em>%</em></span></div>
+  <div class="card"><span class="label">x402 paid-to-think</span><span class="value">{{ (s?.x402SpentCspr ?? 0).toFixed(2) }} <em>CSPR</em></span></div>
+  <div class="card"><span class="label">On-chain actions</span><span class="value">{{ s?.actions ?? 0 }}</span></div>
+</section>
+
+<main class="grid">
+  <section class="feed panel">
+    <h2>Live audit feed <small>every agent decision, on-chain</small></h2>
+    <ul>
+      @for (e of events(); track $index) {
+        <li>
+          <span class="time">{{ e.time }}</span>
+          <span class="badge" [class]="kindClass(e.kind)">{{ e.kind }}</span>
+          <span class="msg">{{ e.message }}</span>
+          @if (e.txUrl) { <a class="tx" href="{{ e.txUrl }}" target="_blank">↗ tx</a> }
+        </li>
+      } @empty {
+        <li class="empty">Waiting for the agent to think…</li>
+      }
+    </ul>
+  </section>
+
+  <aside class="side">
+    <section class="panel">
+      <h2>Allowlisted validators <small>live CSPR.cloud metrics</small></h2>
+      @for (v of s?.validators ?? []; track v.publicKey) {
+        <div class="validator" [class.breach]="!v.compliant">
+          <div class="row">
+            <a href="https://testnet.cspr.live/validator/{{ v.publicKey }}" target="_blank" class="vk">{{ short(v.publicKey) }}</a>
+            <span class="pill" [class.ok]="v.compliant" [class.bad]="!v.compliant">{{ v.compliant ? 'in policy' : 'off policy' }}</span>
+          </div>
+          <div class="meta">
+            <span>commission <b>{{ v.feePercent }}%</b></span>
+            <span>{{ v.active ? 'active' : 'inactive' }}</span>
+            @if (v.delegatedCspr > 0) { <span>delegated <b>{{ v.delegatedCspr }}</b> CSPR</span> }
+          </div>
+        </div>
+      } @empty {
+        <p class="empty">No validators perceived yet.</p>
+      }
+    </section>
+
+    <section class="panel">
+      <h2>Material proposals <small>need a human co-sign</small></h2>
+      @for (p of pendingProposals(); track p.id) {
+        <div class="proposal">
+          <div class="row">
+            <span>#{{ p.id }} {{ p.undelegate ? 'undelegate' : 'delegate' }} <b>{{ p.amountCspr }} CSPR</b></span>
+            <a class="tx" href="https://testnet.cspr.live/transaction/{{ p.txHash }}" target="_blank">↗</a>
+          </div>
+          <div class="vk">→ {{ short(p.validator) }}</div>
+          <button (click)="approve(p)" [disabled]="approving() === p.id">
+            {{ approving() === p.id ? 'co-signing…' : 'Co-sign (owner)' }}
+          </button>
+        </div>
+      } @empty {
+        <p class="empty">No moves awaiting co-sign — the agent is operating within its leash.</p>
+      }
+    </section>
+  </aside>
+</main>
+
+<footer>
+  The agent can rebalance stake within the cap &amp; allowlist, but <b>cannot withdraw</b> and
+  <b>cannot raise its own authority</b>. The leash is enforced by the Casper contract, not this server.
+</footer>
