@@ -36,6 +36,7 @@ pub enum Error {
     Paused = 11,
     PerValidatorCapExceeded = 12,
     RateLimited = 13,
+    NotInstaller = 14,
 }
 
 /// A pending over-cap (material) staking move awaiting owner approval.
@@ -135,20 +136,36 @@ pub struct GovernedVault {
     next_id: Var<u32>,
     allowlist: Mapping<PublicKey, bool>,
     proposals: Mapping<u32, Proposal>,
+    installer: Var<Address>,          // recorded at install (constructor); only it may initialize
     // --- richer policy (owner-controlled) ---
     paused: Var<bool>,                // kill-switch: when true, all agent moves revert
     max_per_validator: Var<U512>,     // per-validator stake ceiling (0 = unlimited) — decentralization
     min_action_interval: Var<u64>,    // ms cooldown between agent moves (0 = disabled) — anti-thrash
     last_action_time: Var<u64>,       // block time (ms) of the agent's last move
+    committed: Mapping<PublicKey, U512>, // vault's own directed stake per validator (lag-free cap basis)
 }
 
 #[odra::module]
 impl GovernedVault {
-    /// One-time init (called once after deploy via a normal call; not an Odra
-    /// constructor, so install needs no constructor args).
+    /// Odra constructor — runs ATOMICALLY inside the install transaction (Odra gates it
+    /// to a one-time constructor group that is revoked right after), so it can never be
+    /// called again or front-run. It records the installer; the operator then configures
+    /// the vault via initialize() from that same account. Takes no args, so the C# install
+    /// flow is unchanged.
+    pub fn init(&mut self) {
+        self.installer.set(self.env().caller());
+    }
+
+    /// One-time configuration — callable ONLY by the installer recorded at install. This
+    /// closes the front-run window: nobody but the deployer can initialize the vault, so
+    /// an attacker cannot race in to become owner of a freshly-installed package.
     pub fn initialize(&mut self, agent: Address, owner: Address, value_cap: U512) {
         if self.agent.get().is_some() {
             self.env().revert(Error::AlreadyInitialized);
+        }
+        let installer = self.installer.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        if self.env().caller() != installer {
+            self.env().revert(Error::NotInstaller);
         }
         self.agent.set(agent);
         self.owner.set(owner);
@@ -180,6 +197,7 @@ impl GovernedVault {
         self.assert_per_validator_cap(&validator, amount);
         self.assert_rate_ok();
         self.env().delegate(validator.clone(), amount);
+        self.add_committed(&validator, amount);
         self.env().emit_event(Delegated { validator, amount });
     }
 
@@ -191,6 +209,7 @@ impl GovernedVault {
         self.assert_within_cap(amount);
         self.assert_rate_ok();
         self.env().undelegate(validator.clone(), amount);
+        self.sub_committed(&validator, amount);
         self.env().emit_event(Undelegated { validator, amount });
     }
 
@@ -210,6 +229,8 @@ impl GovernedVault {
         self.assert_per_validator_cap(&new_validator, amount);
         self.assert_rate_ok();
         self.do_redelegate(validator.clone(), new_validator.clone(), amount);
+        self.sub_committed(&validator, amount);
+        self.add_committed(&new_validator, amount);
         self.env().emit_event(Redelegated { from: validator, to: new_validator, amount });
     }
 
@@ -228,15 +249,19 @@ impl GovernedVault {
     /// Owner (human/exchange) approves and executes a pending material move.
     pub fn approve_material(&mut self, id: u32) {
         self.assert_owner();
+        self.assert_not_paused(); // kill-switch freezes execution of queued agent proposals too
         let mut p = self.proposals.get(&id).unwrap_or_revert_with(self, Error::NoSuchProposal);
         if p.resolved {
             self.env().revert(Error::ProposalAlreadyResolved);
         }
         if p.undelegate {
             self.env().undelegate(p.validator.clone(), p.amount);
+            self.sub_committed(&p.validator, p.amount);
         } else {
             self.assert_validator_allowed(&p.validator);
+            self.assert_per_validator_cap(&p.validator, p.amount); // decentralization ceiling holds on the big-move path too
             self.env().delegate(p.validator.clone(), p.amount);
+            self.add_committed(&p.validator, p.amount);
         }
         p.resolved = true;
         self.env().emit_event(MaterialExecuted { id, validator: p.validator.clone(), amount: p.amount });
@@ -306,6 +331,14 @@ impl GovernedVault {
     pub fn withdraw(&mut self, amount: U512) {
         self.assert_owner();
         let owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        // Reserve the agent's posted bond: the owner may only withdraw the FREE (liquid,
+        // un-delegated, non-bond) balance. The bond stays escrowed in the vault.
+        let bond = self.bond.get_or_default();
+        let balance = self.env().self_balance();
+        let available = if balance > bond { balance - bond } else { U512::zero() };
+        if amount > available {
+            self.env().revert(Error::InsufficientFreeBalance);
+        }
         self.env().transfer_tokens(&owner, &amount);
         self.env().emit_event(Withdrawn { to: owner, amount });
     }
@@ -372,11 +405,24 @@ impl GovernedVault {
     }
     /// Reject a delegation that would push the validator's stake over the per-validator
     /// ceiling (0 = unlimited). Reads the contract's current delegation from the auction.
+    /// Enforce the per-validator ceiling against the vault's OWN committed (directed)
+    /// stake — an in-contract accumulator that updates the instant a move is issued, so
+    /// it is immune to Casper's ~7-era auction settlement lag (can't be walked over the
+    /// cap with several sub-cap moves before the auction reflects them).
     fn assert_per_validator_cap(&self, validator: &PublicKey, add: U512) {
         let max = self.max_per_validator.get_or_default();
-        if max > U512::zero() && self.env().delegated_amount(validator.clone()) + add > max {
+        if max > U512::zero() && self.committed.get_or_default(validator) + add > max {
             self.env().revert(Error::PerValidatorCapExceeded);
         }
+    }
+    fn add_committed(&mut self, validator: &PublicKey, amount: U512) {
+        let c = self.committed.get_or_default(validator) + amount;
+        self.committed.set(validator, c);
+    }
+    fn sub_committed(&mut self, validator: &PublicKey, amount: U512) {
+        let cur = self.committed.get_or_default(validator);
+        let c = if cur > amount { cur - amount } else { U512::zero() };
+        self.committed.set(validator, c);
     }
     /// Enforce the cooldown between agent moves (0 = disabled) and record the time of
     /// this move. The first move is always allowed (no prior timestamp).
@@ -547,6 +593,55 @@ mod tests {
         assert_eq!(vault.try_delegate(v1.clone(), u(100)), Err(Error::RateLimited.into())); // too soon
         env.advance_block_time(5_000);
         vault.delegate(v1, u(100)); // cooldown elapsed → ok
+    }
+
+    #[test]
+    fn initialize_only_by_installer() {
+        let env = odra_test::env();
+        let owner = env.get_account(0);
+        let agent = env.get_account(1);
+        let stranger = env.get_account(2);
+        env.set_caller(owner);
+        let mut vault = GovernedVault::deploy(&env, NoArgs); // installer = owner
+        env.set_caller(stranger);
+        assert_eq!(vault.try_initialize(agent, owner, u(1000)), Err(Error::NotInstaller.into()));
+        env.set_caller(owner);
+        vault.initialize(agent, owner, u(1000)); // installer can
+        assert_eq!(vault.get_owner(), owner);
+    }
+
+    #[test]
+    fn kill_switch_blocks_queued_material() {
+        let (env, mut vault, agent, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        let id = vault.propose_material(v2, u(5000), false); // proposed while unpaused
+        env.set_caller(owner);
+        vault.set_paused(true);
+        assert_eq!(vault.try_approve_material(id), Err(Error::Paused.into())); // pause freezes execution too
+    }
+
+    #[test]
+    fn per_validator_cap_enforced_on_material() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.set_max_per_validator(u(600));
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500
+        let id = vault.propose_material(v1, u(200), false); // +200 would breach the 600 ceiling
+        env.set_caller(owner);
+        assert_eq!(vault.try_approve_material(id), Err(Error::PerValidatorCapExceeded.into()));
+    }
+
+    #[test]
+    fn withdraw_reserves_the_bond() {
+        let (env, mut vault, _a, owner, _v1, _v2) = setup(); // setup funded 100_000 CSPR treasury
+        env.set_caller(owner);
+        vault.with_tokens(u(3000)).deposit_bond(); // balance 103_000, bond 3_000 → free 100_000
+        assert_eq!(vault.try_withdraw(u(100_001)), Err(Error::InsufficientFreeBalance.into()));
+        vault.withdraw(u(100_000)); // exactly the free balance, bond stays escrowed
+        assert_eq!(vault.bond(), u(3000));
     }
 
     #[test]

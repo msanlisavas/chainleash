@@ -78,19 +78,28 @@ yield; the agent only switches validators when the gain outweighs the unbonding 
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
-[`1a34ca6c…87d1`](https://testnet.cspr.live/contract-package/1a34ca6c151d8747d88337740ca0f70b1b31cde097dbacebed4c671d8c9b87d1)).
-Selected on-chain artifacts (click to verify):
+[`cd59684f…def3`](https://testnet.cspr.live/contract-package/cd59684f7e1cef2e2a78fd8e8c184a00282b9a9af1e981679778e6628440def3),
+security-hardened — see below). Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
 |------|-------------|
-| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`b02bcc74…`](https://testnet.cspr.live/transaction/b02bcc74ce981b0aedc4e0e0fb879636b91ac84c7735a602ab5cb97f87e6b55f) |
-| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`54f60083…`](https://testnet.cspr.live/transaction/54f60083f5b0722f9810b83e090ad751edd145eb3002ec35eb5f2ea75ac3f185) |
-| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`1e98c04b…`](https://testnet.cspr.live/transaction/1e98c04b1cbec64452cdba9106034712b391968e7b2cf8ea49452f58d6f802e7) |
-| Over per-validator cap — **rejected on-chain** (`PerValidatorCapExceeded`, decentralization) | [`fa2e43ab…`](https://testnet.cspr.live/transaction/fa2e43abc1037b31367cfe09cc2be85072b621c38943d727ff8dc32223caa4a7) |
-| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`62d0bebb…`](https://testnet.cspr.live/transaction/62d0bebbf2cb8909642fb9b3bc836af83e432c839b75f18b57be46a984c49989) |
-| Human owner **co-signs** → a material (over-cap) move executes | [`0913698d…`](https://testnet.cspr.live/transaction/0913698d355607e29e9a2a4886b212d4caeac587fb6abeaef9805ad05f9765aa) |
-| Agent **undelegates** 200 CSPR back to the vault | [`7ddcc527…`](https://testnet.cspr.live/transaction/7ddcc5278e11a4304bc1617332a527cb482ae42a5b31970f9f09cf01c7cc2c66) |
+| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`13f64ab8…`](https://testnet.cspr.live/transaction/13f64ab8ba8bf750725e871d6f5a4b1161de92e71b157c178d4470fc76332386) |
+| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`48bc83b7…`](https://testnet.cspr.live/transaction/48bc83b7b917729a5a6a2a3fa1c3ccc0bb702cbe4f173af180454278461f5983) |
+| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`51ac564e…`](https://testnet.cspr.live/transaction/51ac564e46bad08b76d5bc94e30a0f650f06330bd5beca1929cc0b9e01bb45b7) |
+| Over per-validator cap — **rejected on-chain** (`PerValidatorCapExceeded`, decentralization) | [`a0329999…`](https://testnet.cspr.live/transaction/a032999904f8bf15f99b6f5ea1364d0b3cb479c855188f14f386676fc5f27e04) |
+| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`d3b33da8…`](https://testnet.cspr.live/transaction/d3b33da8011f650fd5c79a542bc4da2da1e5b9ad851e35aeadb6fe480094c382) |
+| Human owner **co-signs** → a material (over-cap) move executes | [`0698ef55…`](https://testnet.cspr.live/transaction/0698ef55be3d2ed29fe5f4d766e0488d8d77183d35368d67c6018ad512d74c07) |
+| Agent **undelegates** 200 CSPR back to the vault | [`1e8a8db7…`](https://testnet.cspr.live/transaction/1e8a8db71e7538817317607b15a47b4b4a60cd28c72678e722e7cd9ccb50711e) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
+
+### Security-reviewed
+
+I ran an adversarial multi-agent security review against the leash invariants and fixed
+every finding before this deployment: the initializer is now an installer-gated `init`
+constructor (no front-run window), the per-validator cap and kill-switch are enforced on
+the material co-sign path too, the cap uses a lag-free in-contract accumulator, and
+`withdraw` reserves the agent's bond. 22/22 contract tests, including regression tests for
+each fix.
 
 Earlier artifacts (autonomous policy-breach exit, non-allowlisted rejection, weighted-key
 over-reach) are catalogued in the deploy notes.
