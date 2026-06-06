@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Numerics;
 using Org.BouncyCastle.Crypto.Digests;
 
 namespace ChainLeash.Agent;
@@ -105,24 +104,13 @@ public sealed class ChainReader
         catch { return null; } // unset field
     }
 
-    private static decimal U512Cspr(byte[]? b)
-    {
-        if (b is null || b.Length == 0) return 0;
-        int n = b[0];
-        BigInteger v = 0;
-        for (int i = 0; i < n && 1 + i < b.Length; i++) v += (BigInteger)b[1 + i] << (8 * i);
-        return (decimal)v / 1_000_000_000m;
-    }
-    private static uint U32(byte[]? b) => b is null || b.Length < 4 ? 0u : (uint)(b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24));
-    private static bool Bool(byte[]? b) => b is not null && b.Length > 0 && b[0] == 1;
-
-    public async Task<decimal> ValueCapCspr() => U512Cspr(await ReadBytes(IxValueCap));
-    public async Task<decimal> BondCspr() => U512Cspr(await ReadBytes(IxBond));
-    public async Task<decimal> MaxPerValidatorCspr() => U512Cspr(await ReadBytes(IxMaxPerValidator));
-    public async Task<bool> Paused() => Bool(await ReadBytes(IxPaused));
-    public async Task<uint> NextProposalId() => U32(await ReadBytes(IxNextId));
-    public async Task<uint> Violations() => U32(await ReadBytes(IxViolations));
-    public async Task<decimal> CommittedCspr(string validatorHex) => U512Cspr(await ReadBytes(IxCommitted, Convert.FromHexString(validatorHex)));
+    public async Task<decimal> ValueCapCspr() => OdraBytes.U512Cspr(await ReadBytes(IxValueCap));
+    public async Task<decimal> BondCspr() => OdraBytes.U512Cspr(await ReadBytes(IxBond));
+    public async Task<decimal> MaxPerValidatorCspr() => OdraBytes.U512Cspr(await ReadBytes(IxMaxPerValidator));
+    public async Task<bool> Paused() => OdraBytes.Bool(await ReadBytes(IxPaused));
+    public async Task<uint> NextProposalId() => OdraBytes.U32(await ReadBytes(IxNextId));
+    public async Task<uint> Violations() => OdraBytes.U32(await ReadBytes(IxViolations));
+    public async Task<decimal> CommittedCspr(string validatorHex) => OdraBytes.U512Cspr(await ReadBytes(IxCommitted, Convert.FromHexString(validatorHex)));
 
     /// Total liquid CSPR in the vault purse (un-delegated; includes the bond).
     public async Task<decimal> TotalBalanceCspr()

@@ -108,7 +108,7 @@ public sealed class AgentWorker : BackgroundService
         var breach = assessments.FirstOrDefault(a => !a.Compliant && committed.GetValueOrDefault(a.PublicKey) > 0);
         var best = assessments.FirstOrDefault(a => a.Compliant);
         var hasBreach = breach.PublicKey is not null && committed.GetValueOrDefault(breach.PublicKey) > 0;
-        var canDeploy = free >= chunk && best.PublicKey is not null && best.Compliant;
+        var canDeploy = StakingPolicy.CanDeploy(free, chunk, best.PublicKey is not null, best.Compliant);
 
         if (!hasBreach && !canDeploy)
         {
@@ -137,18 +137,18 @@ public sealed class AgentWorker : BackgroundService
         }
 
         if (hasBreach) await ExitBreach(breach, best, committed.GetValueOrDefault(breach.PublicKey!), cap);
-        else await Deploy(best, Math.Min(free, chunk), cap, escalate);
+        else await Deploy(best, StakingPolicy.DeployAmount(free, chunk), cap, escalate);
     }
 
     /// A delegated validator broke policy → redelegate its stake to the best compliant
     /// validator (single native tx); undelegate to the vault if none is compliant.
     private async Task ExitBreach(ValidatorMonitor.Assessment breach, ValidatorMonitor.Assessment best, decimal position, decimal cap)
     {
-        var amount = Math.Min(position, cap);
+        var amount = StakingPolicy.ExitAmount(position, cap);
         var from = PublicKey.FromHexString(breach.PublicKey);
         var hasDestination = best.PublicKey is not null && best.Compliant && best.PublicKey != breach.PublicKey;
 
-        if (position > cap)
+        if (StakingPolicy.MustEscalateExit(position, cap))
         {
             await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}); position {position} > cap → escalating exit.", validator: breach.PublicKey, amountCspr: position);
             await Propose(from, position, undelegate: true, $"exit breaching validator (position {position} > cap {cap})");
@@ -172,7 +172,7 @@ public sealed class AgentWorker : BackgroundService
     private async Task Deploy(ValidatorMonitor.Assessment best, decimal amount, decimal cap, bool escalate)
     {
         var validator = PublicKey.FromHexString(best.PublicKey);
-        if (amount > cap || escalate)
+        if (StakingPolicy.RequiresProposal(amount, cap, escalate))
         {
             await Propose(validator, amount, undelegate: false, amount > cap ? $"deploy {amount} > cap {cap}" : "elevated risk read → human co-sign");
             return;
