@@ -7,6 +7,7 @@ builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, relo
 
 builder.Services.AddSingleton<CasperVault>();
 builder.Services.AddSingleton<X402Client>();
+builder.Services.AddSingleton<ValidatorMonitor>();
 builder.Services.AddHostedService<AgentWorker>();
 
 var host = builder.Build();

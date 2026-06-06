@@ -3,9 +3,11 @@ using Casper.Network.SDK.Types;
 
 namespace ChainLeash.Agent;
 
-/// On-chain interface to the live GovernedVault (Casper 2.0 testnet).
-/// Calls entry points by package hash, signed by the agent key. Reuses the
-/// patterns proven in the spike harness (see finding 05).
+/// On-chain interface to the live staking GovernedVault (Casper 2.0 testnet).
+/// The vault HOLDS the treasury's CSPR and delegates it; this client issues the
+/// agent's routine moves (delegate/undelegate, capped + allowlisted) and over-cap
+/// "material" proposals for the human to co-sign. Calls go by package hash, signed
+/// by the agent key. The chain enforces the cap/allowlist — see governed_vault.rs.
 public sealed class CasperVault
 {
     private readonly IConfiguration _cfg;
@@ -21,21 +23,32 @@ public sealed class CasperVault
 
     public PublicKey AgentKey => _agentKp.PublicKey;
 
-    private NetCasperClient Rpc()
-    {
-        var http = new HttpClient();
-        var key = _cfg["Casper:CsprCloudAccessKey"];
-        if (!string.IsNullOrWhiteSpace(key)) http.DefaultRequestHeaders.Add("Authorization", key);
-        return new NetCasperClient(_cfg["Casper:NodeRpcUrl"], http);
-    }
+    /// Routine autonomous delegation (≤ cap, validator must be allowlisted).
+    /// The chain reverts with OverCap/ValidatorNotAllowed if the leash is exceeded.
+    public Task<TxResult> Delegate(PublicKey validator, ulong amountMotes) =>
+        Call("delegate", new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("amount", CLValue.U512(amountMotes)),
+        }, paymentMotes: 30_000_000_000UL);
 
-    /// Agent proposes an over-cap (material) move — emits MaterialProposed on-chain,
-    /// awaiting the human's approval. No treasury funding required.
-    public Task<TxResult> ProposeMaterial(PublicKey counterparty, ulong amountMotes) =>
+    /// Routine autonomous undelegation (≤ cap). Funds unbond back to the VAULT,
+    /// never to the agent — the agent can rebalance but can't drain.
+    public Task<TxResult> Undelegate(PublicKey validator, ulong amountMotes) =>
+        Call("undelegate", new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("amount", CLValue.U512(amountMotes)),
+        }, paymentMotes: 30_000_000_000UL);
+
+    /// Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed
+    /// on-chain and waits for the human owner to co-sign approve_material.
+    public Task<TxResult> ProposeMaterial(PublicKey validator, ulong amountMotes, bool undelegate) =>
         Call("propose_material", new List<NamedArg>
         {
-            new NamedArg("counterparty", CLValue.KeyFromPublicKey(counterparty)),
+            new NamedArg("validator", CLValue.PublicKey(validator)),
             new NamedArg("amount", CLValue.U512(amountMotes)),
+            new NamedArg("undelegate", CLValue.Bool(undelegate)),
         });
 
     /// Overseer tightens (only lowers) the cap — emits CapTightened.
@@ -63,6 +76,14 @@ public sealed class CasperVault
             if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
         }
         return new TxResult(tx.Hash, false, "timeout");
+    }
+
+    private NetCasperClient Rpc()
+    {
+        var http = new HttpClient();
+        var key = _cfg["Casper:CsprCloudAccessKey"];
+        if (!string.IsNullOrWhiteSpace(key)) http.DefaultRequestHeaders.Add("Authorization", key);
+        return new NetCasperClient(_cfg["Casper:NodeRpcUrl"], http);
     }
 }
 
