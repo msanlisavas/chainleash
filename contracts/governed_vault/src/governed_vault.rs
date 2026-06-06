@@ -33,6 +33,9 @@ pub enum Error {
     AlreadyInitialized = 8,
     CapNotLower = 9,
     InsufficientFreeBalance = 10,
+    Paused = 11,
+    PerValidatorCapExceeded = 12,
+    RateLimited = 13,
 }
 
 /// A pending over-cap (material) staking move awaiting owner approval.
@@ -109,6 +112,18 @@ pub struct Withdrawn {
     pub to: Address,
     pub amount: U512,
 }
+#[odra::event]
+pub struct PausedSet {
+    pub paused: bool,
+}
+#[odra::event]
+pub struct PerValidatorCapSet {
+    pub max: U512,
+}
+#[odra::event]
+pub struct ActionIntervalSet {
+    pub interval_ms: u64,
+}
 
 #[odra::module]
 pub struct GovernedVault {
@@ -120,6 +135,11 @@ pub struct GovernedVault {
     next_id: Var<u32>,
     allowlist: Mapping<PublicKey, bool>,
     proposals: Mapping<u32, Proposal>,
+    // --- richer policy (owner-controlled) ---
+    paused: Var<bool>,                // kill-switch: when true, all agent moves revert
+    max_per_validator: Var<U512>,     // per-validator stake ceiling (0 = unlimited) — decentralization
+    min_action_interval: Var<u64>,    // ms cooldown between agent moves (0 = disabled) — anti-thrash
+    last_action_time: Var<u64>,       // block time (ms) of the agent's last move
 }
 
 #[odra::module]
@@ -154,8 +174,11 @@ impl GovernedVault {
     /// Routine autonomous delegation by the agent — capped + allowlisted.
     pub fn delegate(&mut self, validator: PublicKey, amount: U512) {
         self.assert_agent();
+        self.assert_not_paused();
         self.assert_within_cap(amount);
         self.assert_validator_allowed(&validator);
+        self.assert_per_validator_cap(&validator, amount);
+        self.assert_rate_ok();
         self.env().delegate(validator.clone(), amount);
         self.env().emit_event(Delegated { validator, amount });
     }
@@ -164,7 +187,9 @@ impl GovernedVault {
     /// the VAULT (after unbonding), never to the agent; the agent cannot drain.
     pub fn undelegate(&mut self, validator: PublicKey, amount: U512) {
         self.assert_agent();
+        self.assert_not_paused();
         self.assert_within_cap(amount);
+        self.assert_rate_ok();
         self.env().undelegate(validator.clone(), amount);
         self.env().emit_event(Undelegated { validator, amount });
     }
@@ -179,8 +204,11 @@ impl GovernedVault {
     /// vault's own purse.
     pub fn redelegate(&mut self, validator: PublicKey, new_validator: PublicKey, amount: U512) {
         self.assert_agent();
+        self.assert_not_paused();
         self.assert_within_cap(amount);
         self.assert_validator_allowed(&new_validator);
+        self.assert_per_validator_cap(&new_validator, amount);
+        self.assert_rate_ok();
         self.do_redelegate(validator.clone(), new_validator.clone(), amount);
         self.env().emit_event(Redelegated { from: validator, to: new_validator, amount });
     }
@@ -189,6 +217,7 @@ impl GovernedVault {
     /// the owner approves. Returns the proposal id.
     pub fn propose_material(&mut self, validator: PublicKey, amount: U512, undelegate: bool) -> u32 {
         self.assert_agent();
+        self.assert_not_paused();
         let id = self.next_id.get_or_default();
         self.next_id.set(id + 1);
         self.proposals.set(&id, Proposal { validator: validator.clone(), amount, undelegate, resolved: false });
@@ -240,6 +269,30 @@ impl GovernedVault {
         self.env().emit_event(ValidatorAllowed { validator, allowed });
     }
 
+    /// Owner kill-switch — while paused, every agent move (delegate/undelegate/
+    /// redelegate/propose) reverts. Owner operations are unaffected.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.assert_owner();
+        self.paused.set(paused);
+        self.env().emit_event(PausedSet { paused });
+    }
+
+    /// Owner sets the per-validator stake ceiling (0 = unlimited) — caps how much the
+    /// agent may concentrate on any single validator, enforcing decentralization.
+    pub fn set_max_per_validator(&mut self, max: U512) {
+        self.assert_owner();
+        self.max_per_validator.set(max);
+        self.env().emit_event(PerValidatorCapSet { max });
+    }
+
+    /// Owner sets the minimum milliseconds between agent moves (0 = disabled) — an
+    /// anti-thrash rate limit so a buggy or hijacked agent can't churn the stake.
+    pub fn set_action_interval(&mut self, interval_ms: u64) {
+        self.assert_owner();
+        self.min_action_interval.set(interval_ms);
+        self.env().emit_event(ActionIntervalSet { interval_ms });
+    }
+
     /// Owner records an on-chain policy violation against the bond.
     pub fn record_violation(&mut self, reason: String) {
         self.assert_owner();
@@ -279,6 +332,15 @@ impl GovernedVault {
     pub fn delegated_to(&self, validator: PublicKey) -> U512 {
         self.env().delegated_amount(validator)
     }
+    pub fn is_paused(&self) -> bool {
+        self.paused.get_or_default()
+    }
+    pub fn max_per_validator(&self) -> U512 {
+        self.max_per_validator.get_or_default()
+    }
+    pub fn action_interval(&self) -> u64 {
+        self.min_action_interval.get_or_default()
+    }
 
     // ---- internal ----
     fn assert_agent(&self) {
@@ -302,6 +364,33 @@ impl GovernedVault {
         if !self.allowlist.get_or_default(validator) {
             self.env().revert(Error::ValidatorNotAllowed);
         }
+    }
+    fn assert_not_paused(&self) {
+        if self.paused.get_or_default() {
+            self.env().revert(Error::Paused);
+        }
+    }
+    /// Reject a delegation that would push the validator's stake over the per-validator
+    /// ceiling (0 = unlimited). Reads the contract's current delegation from the auction.
+    fn assert_per_validator_cap(&self, validator: &PublicKey, add: U512) {
+        let max = self.max_per_validator.get_or_default();
+        if max > U512::zero() && self.env().delegated_amount(validator.clone()) + add > max {
+            self.env().revert(Error::PerValidatorCapExceeded);
+        }
+    }
+    /// Enforce the cooldown between agent moves (0 = disabled) and record the time of
+    /// this move. The first move is always allowed (no prior timestamp).
+    fn assert_rate_ok(&mut self) {
+        let interval = self.min_action_interval.get_or_default();
+        if interval == 0 {
+            return;
+        }
+        let now = self.env().get_block_time();
+        let last = self.last_action_time.get_or_default();
+        if last != 0 && now < last + interval {
+            self.env().revert(Error::RateLimited);
+        }
+        self.last_action_time.set(now);
     }
 
     /// Invoke the Casper auction's native `redelegate` from the vault's main purse.
@@ -421,6 +510,43 @@ mod tests {
         let (env, mut vault, _a, owner, v1, v2) = setup();
         env.set_caller(owner);
         assert_eq!(vault.try_redelegate(v1, v2, u(500)), Err(Error::NotAgent.into()));
+    }
+
+    #[test]
+    fn kill_switch_blocks_agent_then_unpause_allows() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.set_paused(true);
+        assert!(vault.is_paused());
+        env.set_caller(agent);
+        assert_eq!(vault.try_delegate(v1.clone(), u(500)), Err(Error::Paused.into()));
+        env.set_caller(owner);
+        vault.set_paused(false);
+        env.set_caller(agent);
+        vault.delegate(v1, u(500)); // allowed once unpaused
+    }
+
+    #[test]
+    fn per_validator_cap_enforced() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.set_max_per_validator(u(600));
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // 0 + 500 ≤ 600 ok
+        assert_eq!(vault.try_delegate(v1, u(200)), Err(Error::PerValidatorCapExceeded.into())); // 500 + 200 > 600
+    }
+
+    #[test]
+    fn action_cooldown_rate_limits() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.set_action_interval(5_000);
+        env.advance_block_time(10_000);
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(100)); // first move ok
+        assert_eq!(vault.try_delegate(v1.clone(), u(100)), Err(Error::RateLimited.into())); // too soon
+        env.advance_block_time(5_000);
+        vault.delegate(v1, u(100)); // cooldown elapsed → ok
     }
 
     #[test]
