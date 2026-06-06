@@ -125,29 +125,52 @@ public sealed class AgentWorker : BackgroundService
             catch (Exception ex) { _log.LogWarning("  x402 read unavailable ({Msg}) — proceeding on the free policy signal.", ex.Message); }
         }
 
-        // A policy breach is urgent — exit fast (routine, ≤ cap). A fresh deploy on an
-        // elevated risk read is escalated to the human even when it's within the cap.
-        if (hasBreach) await ExitBreach(breach, cap, ct);
+        // A policy breach is urgent — rebalance away. A fresh deploy on an elevated
+        // risk read is escalated to the human even when it's within the cap.
+        if (hasBreach) await ExitBreach(breach, best, cap, ct);
         else await Deploy(best, chunk, cap, escalate, ct);
     }
 
-    /// A delegated validator broke policy → reduce/exit the position (rebalance away).
-    private async Task ExitBreach(ValidatorMonitor.Assessment breach, decimal cap, CancellationToken ct)
+    /// A delegated validator broke policy → move its stake to the best compliant
+    /// validator via a single native redelegate (the "switch to a better validator"
+    /// move). If there is no compliant destination, undelegate back to the vault.
+    private async Task ExitBreach(ValidatorMonitor.Assessment breach, ValidatorMonitor.Assessment best, decimal cap, CancellationToken ct)
     {
         var position = _delegated.GetValueOrDefault(breach.PublicKey);
         var amount = Math.Min(position, cap);
-        _log.LogWarning("tick {T}: POLICY BREACH on {V}… ({Note}) — undelegating {Amt} CSPR back to the vault.", _tick, breach.PublicKey[..12], breach.Note, amount);
-        await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — exiting {amount} CSPR.", validator: breach.PublicKey, amountCspr: amount);
+        var from = PublicKey.FromHexString(breach.PublicKey);
+        var hasDestination = best.PublicKey is not null && best.Compliant && best.PublicKey != breach.PublicKey;
 
-        var validator = PublicKey.FromHexString(breach.PublicKey);
         if (position > cap)
         {
-            await Propose(validator, position, undelegate: true, $"exit breaching validator (position {position} > cap {cap})");
+            _log.LogWarning("tick {T}: POLICY BREACH on {V}… ({Note}) — position {P} > cap, escalating exit to human co-sign.", _tick, breach.PublicKey[..12], breach.Note, position);
+            await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — position {position} > cap, escalating exit.", validator: breach.PublicKey, amountCspr: position);
+            await Propose(from, position, undelegate: true, $"exit breaching validator (position {position} > cap {cap})");
             return;
         }
-        var r = await _vault.Undelegate(validator, Motes(amount));
-        await Audit("UNDELEGATE", breach.PublicKey, amount, r);
-        if (r.Success) { _delegated[breach.PublicKey] = position - amount; _idleCspr += amount; _actions++; }
+
+        if (hasDestination)
+        {
+            var bestPk = best.PublicKey!;
+            var to = PublicKey.FromHexString(bestPk);
+            _log.LogWarning("tick {T}: POLICY BREACH on {V}… ({Note}) — redelegating {Amt} CSPR → {Best}… ({BestNote}).", _tick, breach.PublicKey[..12], breach.Note, amount, bestPk[..12], best.Note);
+            await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — switching {amount} CSPR to {bestPk[..10]}… ({best.Note}).", validator: breach.PublicKey, amountCspr: amount);
+            var r = await _vault.Redelegate(from, to, Motes(amount));
+            await Audit("REDELEGATE", bestPk, amount, r);
+            if (r.Success)
+            {
+                _delegated[breach.PublicKey] = position - amount;
+                _delegated[bestPk] = _delegated.GetValueOrDefault(bestPk) + amount;
+                _actions++;
+            }
+            return;
+        }
+
+        _log.LogWarning("tick {T}: POLICY BREACH on {V}… ({Note}) — no compliant validator; undelegating {Amt} CSPR to the vault.", _tick, breach.PublicKey[..12], breach.Note, amount);
+        await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — no compliant validator; undelegating {amount} CSPR to the vault.", validator: breach.PublicKey, amountCspr: amount);
+        var u = await _vault.Undelegate(from, Motes(amount));
+        await Audit("UNDELEGATE", breach.PublicKey, amount, u);
+        if (u.Success) { _delegated[breach.PublicKey] = position - amount; _idleCspr += amount; _actions++; }
     }
 
     /// Idle treasury + a compliant best validator → deploy a chunk into it.

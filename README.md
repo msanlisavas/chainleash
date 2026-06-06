@@ -57,17 +57,21 @@ validator data is public, so the moat is the *leash*, not the data.
 
 ## Proven on Casper 2.0 testnet
 
-The full leash runs end-to-end on testnet (package `3132a5a7…703f`). Selected on-chain
-artifacts (all on [testnet.cspr.live](https://testnet.cspr.live)):
+The full leash runs end-to-end on testnet (package
+[`8f1d2c7d…879fac`](https://testnet.cspr.live/contract-package/8f1d2c7d7a6d26c58479fcc6be913a77223afdb2bd2dc5664ee58a59c2879fac)).
+Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
 |------|-------------|
-| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | `a383345504450ceed84cae671a09e174e1653ef65e33990715312426bcd8f391` |
-| Over-cap delegate (700 > 600) — **rejected on-chain** (`OverCap`) | `e859ee205361758c8d415cd33257926e380073461f46abc1f08ab723cc84cc38` |
-| Delegate to a **non-allowlisted** validator — **rejected on-chain** (`ValidatorNotAllowed`) | `51f23498763ada110cb45fa353e9282109eaba8cac655f3798b51d3cedaf0d46` |
-| Agent proposes a material (over-cap) move | `c3070b9de380b36bacd4e78a3698b98a240cafa640aab20db2961dfe657f44b4` |
-| Human owner **co-signs** → the material move executes | `1068cbf13c4710e5c8839f9034880235b4ec0d0488e1d458b7fc265c606134f1` |
-| Agent pays for the premium risk read over **x402** (real CSPR transfer) | `cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943` |
+| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`cf1d7922…`](https://testnet.cspr.live/transaction/cf1d792224182561baa9fe99546ceaa51d8e6d549ef88ff8996653d517a2f63b) |
+| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`9989c29f…`](https://testnet.cspr.live/transaction/9989c29f241ca1b023f99518141a8efd50deb98563ac69b475aac972c11f067b) |
+| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`cfe49e71…`](https://testnet.cspr.live/transaction/cfe49e71ad4ff4881a394a083a2b022a15dbe208aa213abada2d2d08ac192a38) |
+| Human owner **co-signs** → a material (over-cap) move executes | [`db5dcd2a…`](https://testnet.cspr.live/transaction/db5dcd2a0d73bf453ed824d1523a88ac6cf59688c1be05412f29ce891f8e1a5e) |
+| Agent **undelegates** 200 CSPR back to the vault | [`7e14d0bc…`](https://testnet.cspr.live/transaction/7e14d0bce1574617354432c5ca1697520ba93b7fae00c8a553b02c30d9161e21) |
+| Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
+
+Earlier artifacts (autonomous policy-breach exit, non-allowlisted rejection, weighted-key
+over-reach) are catalogued in the deploy notes.
 
 ## How the agent works
 
@@ -77,7 +81,9 @@ Each tick the agent:
 2. scores them against the **published delegation policy** (max commission, must-be-active);
 3. if there's an actionable opportunity, **pays over x402** for a premium risk read;
 4. **acts within the leash** — deploys idle treasury to the lowest-commission compliant
-   validator (routine, ≤ cap), or escalates an over-cap / elevated-risk move to a
+   validator (routine, ≤ cap); when a delegated validator breaches policy (e.g. a
+   commission hike) it **redelegates** that stake straight to the best compliant
+   validator in one native tx; over-cap or elevated-risk moves are escalated to a
    human-co-signed proposal;
 5. otherwise **chooses not to act** — restraint as intelligence.
 

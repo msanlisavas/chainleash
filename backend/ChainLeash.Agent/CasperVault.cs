@@ -41,6 +41,17 @@ public sealed class CasperVault
             new NamedArg("amount", CLValue.U512(amountMotes)),
         }, paymentMotes: 30_000_000_000UL);
 
+    /// Routine autonomous redelegation — move stake from one validator to another in a
+    /// single native tx (≤ cap, destination allowlisted). The cleanest "switch to a
+    /// better validator" move: no manual unstake/restake, destination committed on-chain.
+    public Task<TxResult> Redelegate(PublicKey from, PublicKey to, ulong amountMotes) =>
+        Call("redelegate", new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(from)),
+            new NamedArg("new_validator", CLValue.PublicKey(to)),
+            new NamedArg("amount", CLValue.U512(amountMotes)),
+        }, paymentMotes: 30_000_000_000UL);
+
     /// Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed
     /// on-chain and waits for the human owner to co-sign approve_material.
     public Task<TxResult> ProposeMaterial(PublicKey validator, ulong amountMotes, bool undelegate) =>

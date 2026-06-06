@@ -53,6 +53,7 @@
   padding: 2px 7px; border-radius: 6px; text-transform: uppercase;
   background: #2a2f3a; color: #aeb6c4;
   &.k-delegate, &.k-undelegate { background: rgba(46,204,113,.16); color: var(--green); }
+  &.k-redelegate { background: rgba(56,189,248,.16); color: var(--accent); }
   &.k-reject  { background: rgba(231,76,60,.18);  color: #ff6b5e; }
   &.k-pay     { background: rgba(52,152,219,.18);  color: #5dade2; }
   &.k-propose { background: rgba(241,196,15,.16);  color: #f1c40f; }
