@@ -46,9 +46,11 @@ Incumbents (Coinbase Agentic Wallets, AWS Bedrock AgentCore) enforce agent spend
 limits **off-chain inside an enclave** — the security of the money equals the security
 of the server. CHAINLEASH makes the limit a **protocol + contract** guarantee
 (cap + allowlist + owner-only withdraw, all chain-enforced), and pairs it with an
-agent that **pays to think**: before acting it buys a
-premium risk read over Casper-native **x402** (a real CSPR settlement) and, when the
-policy is satisfied and nothing is off-policy, it **chooses not to act at all**.
+agent that **pays to think**: before acting it buys a premium risk read over
+Casper-native **x402** — a real CSPR settlement the provider **verifies on-chain**
+(recipient, amount, finality) and won't accept twice (replay-protected); the read
+itself is derived from **live validator metrics**, not mock data. And when the policy
+is satisfied and nothing is off-policy, the agent **chooses not to act at all**.
 
 ## Business model
 

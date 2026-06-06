@@ -123,7 +123,7 @@ public sealed class AgentWorker : BackgroundService
             try
             {
                 _buys++;
-                var sig = await _x402.BuySignal();
+                var sig = await _x402.BuySignal(best.PublicKey); // risk read for the validator we're about to act on
                 _feed.State.Buys = _buys;
                 _feed.State.X402SpentCspr += (decimal)sig.PaidMotes / 1_000_000_000m;
                 var hash = string.IsNullOrEmpty(sig.SettlementHash) ? null : sig.SettlementHash;
