@@ -51,7 +51,10 @@ public sealed class AgentWorker : BackgroundService
             chunk, period.TotalSeconds, _validators.MaxCommissionPercent);
         await Emit("ONLINE", $"Agent online — reading vault state from chain; policy: commission ≤ {_validators.MaxCommissionPercent}%.");
 
-        await MaybePostBond(bondTarget);
+        if (_vault.ReadOnly)
+            await Emit("HOLD", "Observer mode — no agent key configured. Reading the live vault read-only; the agent signs nothing. Add an agent key (see RUNBOOK) and point at your own vault to enable on-chain moves.");
+        else
+            await MaybePostBond(bondTarget);
 
         while (!ct.IsCancellationRequested)
         {
@@ -97,6 +100,8 @@ public sealed class AgentWorker : BackgroundService
 
         await RefreshState(assessments, committed, cap, free, paused);
         await MaybeWarnLowGas();
+
+        if (_vault.ReadOnly) return; // observer mode: perceive + stream live state, never act
 
         if (paused)
         {
@@ -226,7 +231,7 @@ public sealed class AgentWorker : BackgroundService
             s.TotalBalanceCspr = await _chain.TotalBalanceCspr();
             s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr();
             s.Violations = (int)await _chain.Violations();
-            s.AgentGasCspr = await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
+            s.AgentGasCspr = _vault.AgentKey is null ? 0 : await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
         }
         catch { /* keep last-known on a transient read failure */ }
         s.Validators = assessments

@@ -30,17 +30,19 @@ app.MapGet("/health", async (ChainReader chain, CasperVault vault, AuditFeed fee
     try
     {
         vaultBal = await chain.TotalBalanceCspr();           // proves chain reachable + vault resolved
-        gas = await chain.AccountBalanceCspr(vault.AgentKey.ToAccountHex());
+        if (vault.AgentKey is not null)                      // observer mode has no agent key / gas wallet
+            gas = await chain.AccountBalanceCspr(vault.AgentKey.ToAccountHex());
         chainOk = true;
     }
     catch (Exception ex) { error = ex.Message; }
-    var lowGas = gas is < 0 ? false : gas is not null && gas < warn;
+    var lowGas = gas is not null && gas < warn;
     var ok = chainOk && !feed.State.Paused && !lowGas;
     return Results.Json(new
     {
         status = ok ? "ok" : "degraded",
         chainReachable = chainOk,
         vaultResolved = vaultBal is not null,
+        readOnly = vault.ReadOnly,                            // observer mode (no agent key)
         paused = feed.State.Paused,
         agentGasCspr = gas,
         lowGas,
@@ -61,6 +63,7 @@ app.MapGet("/api/config", (CasperVault vault, IConfiguration cfg) => Results.Jso
     csprClickAppId = cfg["Dashboard:CsprClickAppId"],
     walletCoSignEnabled = vault.OwnerKey is not null,
     allowServerKeyCoSign = vault.AllowServerKeyCoSign,
+    readOnly = vault.ReadOnly,                                // observer mode: agent signs nothing
 }));
 
 // Step 1 of the wallet co-sign: server builds the UNSIGNED approve_material tx for the
@@ -81,7 +84,7 @@ app.MapGet("/api/approve/{id:int}/prepare", (int id, CasperVault vault) =>
 app.MapPost("/api/approve/{id:int}/confirm", async (int id, ConfirmReq body, CasperVault vault, AuditFeed feed) =>
 {
     var p = feed.State.Proposals.FirstOrDefault(x => x.Id == (uint)id);
-    var r = await vault.ConfirmCoSign(body.TxHash);
+    var r = await vault.ConfirmCoSign((uint)id, body.TxHash);
     if (r.Success)
         feed.State.Proposals = feed.State.Proposals.Select(x => x.Id == (uint)id ? x with { Resolved = true } : x).ToList();
     await feed.Push(new AuditEvent(
