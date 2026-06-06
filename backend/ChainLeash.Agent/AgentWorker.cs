@@ -1,74 +1,80 @@
 namespace ChainLeash.Agent;
 
-/// The autonomous agent loop. Each tick it perceives a rate/risk signal, runs
-/// explicit expected-value math to decide whether acting is even worth it
-/// (and frequently CHOOSES NOT TO ACT), and when a move is material (over the
-/// chain-enforced cap) it proposes it on-chain for the human to co-sign.
+/// The autonomous agent loop with x402 "pay-to-think":
+/// 1. a free/cheap prior decides whether the data is even worth buying;
+/// 2. if so, it PAYS over x402 (a real Casper transfer) for the premium signal;
+/// 3. it runs expected-value math and, when a move is material (over the
+///    chain-enforced cap), proposes it on-chain for the human to co-sign.
+/// It frequently CHOOSES NOT TO ACT — often without even buying the signal.
 ///
-/// The EV policy here is deterministic + transparent; the LLM (Claude) decision
-/// layer plugs in at MakeDecision() next. The signal is a local mock until the
-/// x402 consumer lands.
+/// EV policy is deterministic + transparent; the Claude decision layer plugs in
+/// at the marked seam once an Anthropic key is configured.
 public sealed class AgentWorker : BackgroundService
 {
     private readonly ILogger<AgentWorker> _log;
     private readonly CasperVault _vault;
+    private readonly X402Client _x402;
     private readonly IConfiguration _cfg;
     private readonly Random _rng = new();
-    private int _tick;
-    private int _proposals;
+    private int _tick, _proposals, _buys;
 
-    public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, IConfiguration cfg)
+    public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, IConfiguration cfg)
     {
-        _log = log; _vault = vault; _cfg = cfg;
+        _log = log; _vault = vault; _x402 = x402; _cfg = cfg;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         var cap = _cfg.GetValue("Agent:ValueCapCspr", 2.0m);
-        var signalCost = _cfg.GetValue("Agent:SignalCostCspr", 0.4m);
         var period = TimeSpan.FromSeconds(_cfg.GetValue("Agent:TickSeconds", 20));
         var maxProposals = _cfg.GetValue("Agent:MaxOnChainProposals", 3);
-        var band = 4.5m;
+        var maxBuys = _cfg.GetValue("Agent:MaxSignalBuys", 3);
+        var band = 4.7m;
 
-        _log.LogInformation("CHAINLEASH agent online — cap={Cap} CSPR, signal={Cost} CSPR, tick={S}s", cap, signalCost, period.TotalSeconds);
+        _log.LogInformation("CHAINLEASH agent online — cap={Cap} CSPR, tick={S}s", cap, period.TotalSeconds);
 
         while (!ct.IsCancellationRequested)
         {
             _tick++;
-            // Perceive: a mock rate/risk signal (~3.5–5.5%). Real x402 fetch is next.
-            var rate = 4.5m + (decimal)(_rng.NextDouble() * 2.0 - 1.0);
-            var edge = Math.Max(0m, rate - band);          // expected edge of reallocating
-            var move = 10m * Math.Max(0m, rate - band);    // size of the candidate move
+            var priorInteresting = _rng.NextDouble() < 0.45; // free prior: is anything happening?
 
-            if (edge <= signalCost)
+            if (!priorInteresting)
             {
-                _log.LogInformation("tick {T}: rate {Rate:F2}% → edge {Edge:F2} ≤ signal {Cost} CSPR. CHOSE NOT TO ACT (didn't even buy the signal).",
-                    _tick, rate, edge, signalCost);
+                _log.LogInformation("tick {T}: prior quiet → CHOSE NOT TO ACT (didn't even buy the signal).", _tick);
             }
-            else if (move <= cap)
+            else if (_buys >= maxBuys)
             {
-                _log.LogInformation("tick {T}: rate {Rate:F2}% → edge {Edge:F2} CSPR. ROUTINE move {Move:F2} CSPR (≤ cap) — would settle autonomously. [settle lands once treasury is funded]",
-                    _tick, rate, edge, move);
+                _log.LogInformation("tick {T}: prior interesting but signal-buy budget spent → holding.", _tick);
             }
             else
             {
-                _log.LogInformation("tick {T}: rate {Rate:F2}% → edge {Edge:F2} CSPR. MATERIAL move {Move:F2} CSPR (> cap {Cap}) — proposing on-chain for human co-sign…",
-                    _tick, rate, edge, move, cap);
-                if (_proposals < maxProposals)
+                try
                 {
-                    _proposals++;
-                    try
+                    _buys++;
+                    var sig = await _x402.BuySignal();
+                    var hash = string.IsNullOrEmpty(sig.SettlementHash) ? "(open)" : sig.SettlementHash[..8];
+                    _log.LogInformation("tick {T}: PAID {Paid:F2} CSPR for the premium signal over x402 ({Hash}) → rate {Rate:F2}% risk {Risk}",
+                        _tick, sig.PaidMotes / 1e9, hash, sig.Rate, sig.Risk);
+
+                    var edge = Math.Max(0m, (decimal)sig.Rate - band);
+                    var move = 12m * edge;
+                    if (edge <= 0m)
+                        _log.LogInformation("  signal below band → no edge. Hold (paid to learn it's not worth acting).");
+                    else if (move <= cap)
+                        _log.LogInformation("  ROUTINE move {Move:F2} CSPR (≤ cap) — would settle autonomously. [settle lands once treasury funded]", move);
+                    else
                     {
-                        var r = await _vault.ProposeMaterial(_vault.AgentKey, (ulong)(move * 1_000_000_000m));
-                        if (r.Success) _log.LogInformation("  ✓ MaterialProposed on-chain: {Url}", r.Url);
-                        else _log.LogWarning("  propose failed: {Err} ({Hash})", r.Error, r.Hash);
+                        _log.LogInformation("  MATERIAL move {Move:F2} CSPR (> cap {Cap}) — proposing on-chain for human co-sign…", move, cap);
+                        if (_proposals < maxProposals)
+                        {
+                            _proposals++;
+                            var r = await _vault.ProposeMaterial(_vault.AgentKey, (ulong)(move * 1_000_000_000m));
+                            if (r.Success) _log.LogInformation("    ✓ MaterialProposed on-chain: {Url}", r.Url);
+                            else _log.LogWarning("    propose failed: {Err}", r.Error);
+                        }
                     }
-                    catch (Exception ex) { _log.LogError(ex, "  propose_material error"); }
                 }
-                else
-                {
-                    _log.LogInformation("  (on-chain proposal cap reached — logging only)");
-                }
+                catch (Exception ex) { _log.LogError(ex, "tick {T}: signal/act error", _tick); }
             }
 
             try { await Task.Delay(period, ct); } catch (TaskCanceledException) { break; }
