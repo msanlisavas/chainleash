@@ -48,6 +48,11 @@ public sealed class AgentWorker : BackgroundService
         _idleCspr = _cfg.GetValue("Staking:TreasuryToDeployCspr", 0m);
         _nextProposalId = (uint)_cfg.GetValue("Staking:NextProposalId", 0);
 
+        // The agent's current on-chain positions. Seeded from config here; in production
+        // it would read the vault's live delegations. Lets it police & exit existing stake.
+        var seed = _cfg.GetSection("Staking:SeedDelegations").Get<Dictionary<string, decimal>>();
+        if (seed is not null) foreach (var (validator, cspr) in seed) _delegated[validator] = cspr;
+
         _feed.State.PackageHash = (_cfg["Casper:GovernedVaultPackageHash"] ?? "").Replace("hash-", "");
         _feed.State.CapCspr = cap;
         _feed.State.MaxCommissionPercent = _validators.MaxCommissionPercent;
