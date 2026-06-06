@@ -25,6 +25,7 @@ Thumbs.db
 *.pem
 *.private.key
 spike/**/Config/*.local.json
+**/appsettings.local.json
 .env
 
 # Claude Code / AI planning artifacts — keep LOCAL, never publish
