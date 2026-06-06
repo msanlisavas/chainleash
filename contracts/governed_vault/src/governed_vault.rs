@@ -37,6 +37,8 @@ pub enum Error {
     PerValidatorCapExceeded = 12,
     RateLimited = 13,
     NotInstaller = 14,
+    ExceedsCommitted = 15, // agent tried to (un/re)delegate more than it has directed to a validator
+    CapNotHigher = 16,     // raise_cap must actually raise the cap
 }
 
 /// A pending over-cap (material) staking move awaiting owner approval.
@@ -227,6 +229,7 @@ impl GovernedVault {
         self.assert_validator_allowed(&validator);
         self.assert_per_validator_cap(&validator, amount);
         self.assert_rate_ok();
+        self.assert_free_balance(amount); // fail fast if the vault lacks liquid CSPR to stake
         self.env().delegate(validator.clone(), amount);
         self.add_committed(&validator, amount);
         self.env().emit_event(Delegated { validator, amount });
@@ -239,6 +242,7 @@ impl GovernedVault {
         self.assert_not_paused();
         self.assert_within_cap(amount);
         self.assert_rate_ok();
+        self.assert_within_committed(&validator, amount); // agent can't undelegate more than it directed
         self.env().undelegate(validator.clone(), amount);
         self.sub_committed(&validator, amount);
         self.env().emit_event(Undelegated { validator, amount });
@@ -259,6 +263,7 @@ impl GovernedVault {
         self.assert_validator_allowed(&new_validator);
         self.assert_per_validator_cap(&new_validator, amount);
         self.assert_rate_ok();
+        self.assert_within_committed(&validator, amount); // can't move more than directed from the source
         self.do_redelegate(validator.clone(), new_validator.clone(), amount);
         self.sub_committed(&validator, amount);
         self.add_committed(&new_validator, amount);
@@ -286,6 +291,10 @@ impl GovernedVault {
             self.env().revert(Error::ProposalAlreadyResolved);
         }
         if p.undelegate {
+            // Owner-reviewed full-exit path: NOT bounded by `committed` on purpose, so the
+            // owner can unwind principal + compounded rewards. sub_committed saturates at 0.
+            // (The AGENT's routine undelegate IS bounded by committed — only the human co-sign
+            // can exceed it, and undelegate keeps funds in the vault, so it can't steal.)
             self.env().undelegate(p.validator.clone(), p.amount);
             self.sub_committed(&p.validator, p.amount);
         } else {
@@ -314,6 +323,9 @@ impl GovernedVault {
     pub fn raise_cap(&mut self, new_cap: U512) {
         self.assert_owner();
         let old_cap = self.value_cap.get_or_default();
+        if new_cap <= old_cap {
+            self.env().revert(Error::CapNotHigher);
+        }
         self.value_cap.set(new_cap);
         self.env().emit_event(CapRaised { old_cap, new_cap });
     }
@@ -502,6 +514,25 @@ impl GovernedVault {
             self.env().revert(Error::OverCap);
         }
     }
+    /// Reject delegating more than the vault's FREE (liquid, non-bond) balance — fails fast
+    /// with a clear error instead of burning gas on an auction call that would revert.
+    fn assert_free_balance(&self, amount: U512) {
+        let bal = self.env().self_balance();
+        let bond = self.bond.get_or_default();
+        let free = if bal > bond { bal - bond } else { U512::zero() };
+        if amount > free {
+            self.env().revert(Error::InsufficientFreeBalance);
+        }
+    }
+    /// Reject an AGENT (un/re)delegation that exceeds what the vault has DIRECTED to that
+    /// validator (the committed accumulator). Stops a compromised agent from over-undelegating
+    /// real positions into unbonding (griefing) and keeps committed consistent (sub never
+    /// saturates). The owner's co-signed material undelegate is intentionally exempt.
+    fn assert_within_committed(&self, validator: &PublicKey, amount: U512) {
+        if amount > self.committed.get_or_default(validator) {
+            self.env().revert(Error::ExceedsCommitted);
+        }
+    }
     fn assert_validator_allowed(&self, validator: &PublicKey) {
         if !self.allowlist.get_or_default(validator) {
             self.env().revert(Error::ValidatorNotAllowed);
@@ -642,6 +673,7 @@ mod tests {
         env.set_caller(owner);
         vault.set_validator(v2.clone(), true);
         env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500 so the source bound passes
         vault.redelegate(v1, v2, u(500));
     }
 
@@ -865,5 +897,60 @@ mod tests {
         env.set_caller(owner);
         vault.record_violation(String::from("commission hike"));
         assert_eq!(vault.violations(), 1);
+    }
+
+    #[test]
+    fn agent_cannot_undelegate_more_than_committed() {
+        let (env, mut vault, agent, _o, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500
+        assert_eq!(vault.try_undelegate(v1.clone(), u(800)), Err(Error::ExceedsCommitted.into()));
+        vault.undelegate(v1.clone(), u(500)); // exactly committed → ok
+        assert_eq!(vault.committed_to(v1), u(0));
+    }
+
+    #[test]
+    fn agent_cannot_redelegate_more_than_committed() {
+        let (env, mut vault, agent, owner, v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(400)); // committed[v1] = 400
+        assert_eq!(vault.try_redelegate(v1.clone(), v2.clone(), u(500)), Err(Error::ExceedsCommitted.into()));
+        vault.redelegate(v1, v2.clone(), u(400)); // within committed → ok
+        assert_eq!(vault.committed_to(v2), u(400));
+    }
+
+    #[test]
+    fn delegate_over_free_balance_reverts() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup(); // 100_000 deposited, cap 1000
+        env.set_caller(owner);
+        vault.withdraw(u(99_700)); // free balance now 300
+        env.set_caller(agent);
+        assert_eq!(vault.try_delegate(v1.clone(), u(800)), Err(Error::InsufficientFreeBalance.into())); // ≤ cap but > free
+        vault.delegate(v1, u(300)); // within free → ok
+    }
+
+    #[test]
+    fn raise_cap_must_actually_raise() {
+        let (env, mut vault, _a, owner, _v1, _v2) = setup(); // cap 1000
+        env.set_caller(owner);
+        assert_eq!(vault.try_raise_cap(u(1000)), Err(Error::CapNotHigher.into())); // equal → reject
+        assert_eq!(vault.try_raise_cap(u(500)), Err(Error::CapNotHigher.into()));  // lower → reject
+        vault.raise_cap(u(2000));
+        assert_eq!(vault.value_cap(), u(2000));
+    }
+
+    #[test]
+    fn material_undelegate_executes_for_owner() {
+        // The owner's co-signed undelegate path has NO assert_within_committed (by design — it's
+        // the full-exit escape hatch). Here it unwinds the whole position; committed → 0.
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500, real 500
+        let id = vault.propose_material(v1.clone(), u(500), true); // undelegate the position
+        env.set_caller(owner);
+        vault.approve_material(id); // owner-reviewed → executes
+        assert_eq!(vault.committed_to(v1), u(0));
     }
 }

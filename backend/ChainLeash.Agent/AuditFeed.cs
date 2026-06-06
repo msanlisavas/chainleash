@@ -40,6 +40,7 @@ public sealed class FeedState
     public decimal MaxPerValidatorCspr { get; set; }// per-validator ceiling (0 = unlimited)
     public int Violations { get; set; }
     public decimal AgentGasCspr { get; set; }       // agent account balance (pays tx gas) — ops/health
+    public bool Stale { get; set; }                 // true if the last chain read failed (values may be stale)
     public List<ValidatorView> Validators { get; set; } = new();
     public List<ProposalView> Proposals { get; set; } = new();
 }
@@ -94,20 +95,27 @@ public sealed class AuditFeed
 
     private void Load()
     {
-        try
+        if (_path is null) return;
+        // Try the primary, then the backup — so a truncated primary (crash mid-write) doesn't
+        // silently zero the audit trail + cumulative spend.
+        foreach (var path in new[] { _path, _path + ".bak" })
         {
-            if (_path is null || !File.Exists(_path)) return;
-            var snap = JsonSerializer.Deserialize<FeedSnapshot>(File.ReadAllText(_path));
-            if (snap is null) return;
-            lock (_lock)
+            try
             {
-                _events.Clear();
-                // file stores newest-first; AddLast preserves that order
-                foreach (var e in snap.Events.Take(200)) _events.AddLast(e);
+                if (!File.Exists(path)) continue;
+                var snap = JsonSerializer.Deserialize<FeedSnapshot>(File.ReadAllText(path));
+                if (snap is null) continue;
+                lock (_lock)
+                {
+                    _events.Clear();
+                    // file stores newest-first; AddLast preserves that order
+                    foreach (var e in snap.Events.Take(200)) _events.AddLast(e);
+                }
+                State.X402SpentCspr = snap.X402SpentCspr;
+                return;
             }
-            State.X402SpentCspr = snap.X402SpentCspr;
+            catch { /* corrupt — fall through to the backup */ }
         }
-        catch { /* corrupt/old snapshot — start fresh */ }
     }
 
     private void Save()
@@ -120,7 +128,12 @@ public sealed class AuditFeed
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(new FeedSnapshot(snapshot, State.X402SpentCspr));
-            File.WriteAllText(_path, json);
+            // Atomic: write a temp file then swap it in (keeping a .bak), so a crash mid-write
+            // never leaves the live snapshot truncated.
+            var tmp = _path + ".tmp";
+            File.WriteAllText(tmp, json);
+            if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
+            else File.Move(tmp, _path);
         }
         catch { /* best-effort persistence — never break the live feed on an I/O hiccup */ }
     }

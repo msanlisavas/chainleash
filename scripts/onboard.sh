@@ -17,15 +17,17 @@
 #     --deposit 1000 --bond 300
 set -euo pipefail
 
-CAP=600; VALIDATORS=""; DEPOSIT=0; BOND=0; OWNER=""; APPID="csprclick-template"
+CAP=600; VALIDATORS=""; DEPOSIT=0; BOND=0; MAXVAL=0; COOLDOWN=30; OWNER=""; APPID="csprclick-template"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --cap)         CAP="$2"; shift 2 ;;
-    --validators)  VALIDATORS="$2"; shift 2 ;;   # comma-separated hexes
-    --deposit)     DEPOSIT="$2"; shift 2 ;;
-    --bond)        BOND="$2"; shift 2 ;;
-    --owner)       OWNER="$2"; shift 2 ;;
-    --appid)       APPID="$2"; shift 2 ;;
+    --cap)               CAP="$2"; shift 2 ;;
+    --validators)        VALIDATORS="$2"; shift 2 ;;   # comma-separated hexes
+    --deposit)           DEPOSIT="$2"; shift 2 ;;
+    --bond)              BOND="$2"; shift 2 ;;
+    --max-per-validator) MAXVAL="$2"; shift 2 ;;       # concentration cap (0 = unlimited)
+    --cooldown)          COOLDOWN="$2"; shift 2 ;;     # anti-thrash seconds (0 = off)
+    --owner)             OWNER="$2"; shift 2 ;;
+    --appid)             APPID="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -70,6 +72,17 @@ fi
 if gt0 "$BOND"; then
   echo "==> [5/6] Posting $BOND CSPR slashable bond..."
   run_spike vault-bond "$PKG" "$(motes "$BOND")"
+fi
+
+# Decentralization controls: per-validator concentration cap (opt-in) + anti-thrash cooldown
+# (on by default) — so a new vault isn't running the weakest posture.
+if gt0 "$MAXVAL"; then
+  echo "==> Setting per-validator cap = $MAXVAL CSPR..."
+  run_spike vault-set-maxval "$PKG" "$(motes "$MAXVAL")"
+fi
+if [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
+  echo "==> Setting action cooldown = $COOLDOWN s..."
+  run_spike vault-set-interval "$PKG" "$((COOLDOWN * 1000))"
 fi
 
 echo "==> [6/6] Pointing the agent at the new vault..."

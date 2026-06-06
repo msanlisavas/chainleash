@@ -8,6 +8,7 @@
 // real product value is the BUYER paying to think). See README.
 
 using System.Collections.Concurrent;
+using System.Numerics;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.local.json", optional: true);
@@ -16,7 +17,10 @@ var app = builder.Build();
 var cfg = app.Configuration;
 // payTo = the provider's account hash (the agent transfers the fee here).
 var payTo = (cfg["X402:PayToAccountHash"] ?? "5bc1cf012c678676ff14c3cd3d2d72ac19d17819d448de4795f7bf1618bfd232").ToLowerInvariant();
-var priceMotes = cfg.GetValue<long>("X402:PriceMotes", 2_500_000_000L); // 2.5 CSPR (Casper native-transfer minimum)
+var priceMotes = BigInteger.Parse(cfg["X402:PriceMotes"] ?? "2500000000"); // 2.5 CSPR; U512 → BigInteger
+// Bind the proof to the expected PAYER (the agent's account hash): otherwise anyone could reuse
+// any historical transfer to payTo as a free-access token. Empty string = accept any payer (legacy).
+var expectedPayer = (cfg["X402:ExpectedPayerAccountHash"] ?? "11b5fdcc0b9653c5d67891c675d1548193779b7ff0a9c942c03f7e6752b52aeb").ToLowerInvariant();
 var apiBase = (cfg["X402:CsprCloudBaseUrl"] ?? "https://api.testnet.cspr.cloud").TrimEnd('/');
 var apiKey = cfg["X402:CsprCloudAccessKey"] ?? cfg["Casper:CsprCloudAccessKey"] ?? "55f79117-fc4d-4d60-9956-65423f39a06a";
 
@@ -53,8 +57,10 @@ async Task<bool> VerifyPayment(string hash)
         foreach (var tr in tDoc.RootElement.GetProperty("data").EnumerateArray())
         {
             var to = tr.GetProperty("to_account_hash").GetString()?.ToLowerInvariant();
-            var amt = long.Parse(tr.GetProperty("amount").GetString()!);
-            if (to == payTo && amt >= priceMotes) return true;
+            var from = tr.TryGetProperty("from_account_hash", out var fh) ? fh.GetString()?.ToLowerInvariant() : null;
+            if (!BigInteger.TryParse(tr.GetProperty("amount").GetString(), out var amt)) continue; // U512-safe
+            var payerOk = string.IsNullOrEmpty(expectedPayer) || from == expectedPayer; // bind to the buyer
+            if (to == payTo && payerOk && amt >= priceMotes) return true;
         }
         return false;
     }
@@ -99,8 +105,8 @@ app.MapGet("/rate", async (HttpContext ctx) =>
     var proof = ctx.Request.Headers["X-Payment"].ToString();
     if (string.IsNullOrWhiteSpace(proof)) return Challenge();
     if (consumed.ContainsKey(proof)) return Challenge();          // replay: one read per payment
-    if (!await VerifyPayment(proof)) return Challenge();          // unverified / unsettled / underpaid
-    consumed.TryAdd(proof, 1);
+    if (!await VerifyPayment(proof)) return Challenge();          // unverified / unsettled / underpaid / wrong payer
+    if (consumed.Count < 100_000) consumed.TryAdd(proof, 1);      // bounded (payer-binding keeps this tiny in practice)
 
     var (rate, risk) = await Signal(ctx.Request.Query["validator"]);
     return Results.Json(new { rate, risk, paidWith = proof });
