@@ -601,8 +601,9 @@ async Task VaultUndelegate()
     await Submit(Rpc(cfg), tx, $"Agent undelegates {motes / 1_000_000_000m:N0} CSPR from {args[2][..12]}… (unbonds back to vault)");
 }
 
-// Agent moves stake straight from one validator to another in a single tx — NO
-// unbonding wait (so no missed rewards). Destination must be allowlisted; ≤ cap.
+// Agent moves stake from one validator to another in a single native tx (the funds
+// unbond from the old validator and auto-move to the new one — standard unbonding
+// applies; no manual re-stake needed). Destination must be allowlisted; ≤ cap.
 // usage: vault-redelegate <package-hash> <fromValidatorHex> <toValidatorHex> <motes>
 async Task VaultRedelegate()
 {
@@ -628,7 +629,7 @@ async Task VaultRedelegate()
         .Payment(30_000_000_000UL, 1)
         .Build();
     tx.Sign(agentKp);
-    await Submit(Rpc(cfg), tx, $"Agent redelegates {motes / 1_000_000_000m:N0} CSPR {args[2][..10]}… → {args[3][..10]}… (no unbonding)");
+    await Submit(Rpc(cfg), tx, $"Agent redelegates {motes / 1_000_000_000m:N0} CSPR {args[2][..10]}… → {args[3][..10]}… (single native tx)");
 }
 
 // Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed,

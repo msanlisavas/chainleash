@@ -169,11 +169,14 @@ impl GovernedVault {
         self.env().emit_event(Undelegated { validator, amount });
     }
 
-    /// Routine autonomous REDELEGATION — move stake from one validator straight to
-    /// another in a single tx, with NO unbonding wait (so no missed rewards). Capped,
-    /// and the DESTINATION validator must be allowlisted (you're free to leave any
-    /// validator, but may only move INTO an approved one). Odra 2.7 doesn't wrap the
-    /// auction's redelegate, so we call it directly from the vault's own purse.
+    /// Routine autonomous REDELEGATION — move stake from one validator to another in a
+    /// single native transaction: the funds unbond from the old validator and auto-move
+    /// to the new one (Casper's standard ~7-era unbonding applies — redelegate is not
+    /// instant), so the agent never has to hold the CSPR or come back to re-stake, and
+    /// the destination is committed on-chain. Capped, and the DESTINATION validator must
+    /// be allowlisted (you may leave any validator, but only move INTO an approved one).
+    /// Odra 2.7 doesn't wrap the auction's redelegate, so we call it directly from the
+    /// vault's own purse.
     pub fn redelegate(&mut self, validator: PublicKey, new_validator: PublicKey, amount: U512) {
         self.assert_agent();
         self.assert_within_cap(amount);
