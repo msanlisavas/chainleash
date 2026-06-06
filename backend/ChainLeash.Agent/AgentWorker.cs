@@ -15,7 +15,7 @@ namespace ChainLeash.Agent;
 /// allowlist. Moves above the cap are pushed on-chain as MATERIAL proposals for
 /// the human owner to co-sign — the agent can never execute them alone, and can
 /// never withdraw CSPR from the vault. The leash is enforced by the contract,
-/// not by this process.
+/// not by this process. Every decision is streamed to the dashboard audit feed.
 public sealed class AgentWorker : BackgroundService
 {
     private readonly ILogger<AgentWorker> _log;
@@ -24,15 +24,17 @@ public sealed class AgentWorker : BackgroundService
     private readonly ValidatorMonitor _validators;
     private readonly IConfiguration _cfg;
     private readonly IHostApplicationLifetime _life;
+    private readonly AuditFeed _feed;
 
     // In-memory view of what the agent has deployed (it is the sole delegator).
     private readonly Dictionary<string, decimal> _delegated = new();
     private decimal _idleCspr;
     private int _tick, _actions, _buys;
+    private uint _nextProposalId;
 
-    public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators, IConfiguration cfg, IHostApplicationLifetime life)
+    public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators, IConfiguration cfg, IHostApplicationLifetime life, AuditFeed feed)
     {
-        _log = log; _vault = vault; _x402 = x402; _validators = validators; _cfg = cfg; _life = life;
+        _log = log; _vault = vault; _x402 = x402; _validators = validators; _cfg = cfg; _life = life; _feed = feed;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -44,9 +46,15 @@ public sealed class AgentWorker : BackgroundService
         var maxBuys = _cfg.GetValue("Agent:MaxSignalBuys", 4);
         var maxTicks = _cfg.GetValue("Agent:MaxTicks", 0); // 0 = run forever
         _idleCspr = _cfg.GetValue("Staking:TreasuryToDeployCspr", 0m);
+        _nextProposalId = (uint)_cfg.GetValue("Staking:NextProposalId", 0);
+
+        _feed.State.PackageHash = (_cfg["Casper:GovernedVaultPackageHash"] ?? "").Replace("hash-", "");
+        _feed.State.CapCspr = cap;
+        _feed.State.MaxCommissionPercent = _validators.MaxCommissionPercent;
 
         _log.LogInformation("CHAINLEASH staking agent online — cap={Cap} CSPR/action, tick={S}s, idle treasury={Idle} CSPR, policy: commission ≤ {Max}%",
             cap, period.TotalSeconds, _idleCspr, _validators.MaxCommissionPercent);
+        await Emit("ONLINE", $"Agent online — cap {cap} CSPR/action, policy: commission ≤ {_validators.MaxCommissionPercent}%, idle treasury {_idleCspr} CSPR.");
 
         while (!ct.IsCancellationRequested)
         {
@@ -68,6 +76,7 @@ public sealed class AgentWorker : BackgroundService
     {
         var assessments = await _validators.Assess(ct);
         if (assessments.Count == 0) { _log.LogInformation("tick {T}: no allowlisted validators configured.", _tick); return; }
+        await RefreshState(assessments);
 
         // 1) Is anything delegated now breaching policy? (e.g. commission hiked, evicted)
         var breach = assessments.FirstOrDefault(a => !a.Compliant && _delegated.GetValueOrDefault(a.PublicKey) > 0);
@@ -79,16 +88,15 @@ public sealed class AgentWorker : BackgroundService
 
         if (!hasBreach && !canDeploy)
         {
-            var seen = best.PublicKey is not null
-                ? $"best allowlisted = {best.PublicKey[..12]}… ({best.Note})"
-                : "no compliant validator in policy";
-            _log.LogInformation("tick {T}: perceived {N} validators, {Seen}; treasury deployed & nothing off-policy → CHOSE NOT TO ACT (no spend).",
-                _tick, assessments.Count, seen);
+            var seen = best.PublicKey is not null ? $"best allowlisted {best.PublicKey[..10]}… ({best.Note})" : "no compliant validator";
+            _log.LogInformation("tick {T}: perceived {N} validators, {Seen}; nothing off-policy → CHOSE NOT TO ACT (no spend).", _tick, assessments.Count, seen);
+            await Emit("HOLD", $"Perceived {assessments.Count} validators, {seen}; treasury deployed & nothing off-policy → chose not to act (no spend).");
             return;
         }
         if (_actions >= maxActions)
         {
             _log.LogInformation("tick {T}: on-chain action budget spent ({N}) → holding.", _tick, _actions);
+            await Emit("HOLD", $"On-chain action budget spent ({_actions}) → holding.");
             return;
         }
 
@@ -100,11 +108,14 @@ public sealed class AgentWorker : BackgroundService
             {
                 _buys++;
                 var sig = await _x402.BuySignal();
-                var hash = string.IsNullOrEmpty(sig.SettlementHash) ? "(open)" : sig.SettlementHash[..8];
+                _feed.State.Buys = _buys;
+                _feed.State.X402SpentCspr += (decimal)sig.PaidMotes / 1_000_000_000m;
+                var hash = string.IsNullOrEmpty(sig.SettlementHash) ? null : sig.SettlementHash;
                 _log.LogInformation("tick {T}: PAID {Paid:F2} CSPR over x402 ({Hash}) for the premium risk read → risk {Risk}",
-                    _tick, sig.PaidMotes / 1e9, hash, sig.Risk);
+                    _tick, sig.PaidMotes / 1e9, hash?[..8] ?? "open", sig.Risk);
+                await Emit("PAY", $"Paid {sig.PaidMotes / 1e9:F2} CSPR over x402 for the premium risk read → risk {sig.Risk}.", amountCspr: (decimal)sig.PaidMotes / 1_000_000_000m, txHash: hash);
                 escalate = sig.Risk == "elevated";
-                if (escalate) _log.LogInformation("  premium read flags ELEVATED risk → escalating this move to human co-sign.");
+                if (escalate) _log.LogInformation("  elevated risk → escalating to human co-sign.");
             }
             catch (Exception ex) { _log.LogWarning("  x402 read unavailable ({Msg}) — proceeding on the free policy signal.", ex.Message); }
         }
@@ -120,8 +131,8 @@ public sealed class AgentWorker : BackgroundService
     {
         var position = _delegated.GetValueOrDefault(breach.PublicKey);
         var amount = Math.Min(position, cap);
-        _log.LogWarning("tick {T}: POLICY BREACH on {V}… ({Note}) — undelegating {Amt} CSPR back to the vault.",
-            _tick, breach.PublicKey[..12], breach.Note, amount);
+        _log.LogWarning("tick {T}: POLICY BREACH on {V}… ({Note}) — undelegating {Amt} CSPR back to the vault.", _tick, breach.PublicKey[..12], breach.Note, amount);
+        await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — exiting {amount} CSPR.", validator: breach.PublicKey, amountCspr: amount);
 
         var validator = PublicKey.FromHexString(breach.PublicKey);
         if (position > cap)
@@ -130,7 +141,7 @@ public sealed class AgentWorker : BackgroundService
             return;
         }
         var r = await _vault.Undelegate(validator, Motes(amount));
-        Audit("UNDELEGATE", breach.PublicKey, amount, r);
+        await Audit("UNDELEGATE", breach.PublicKey, amount, r);
         if (r.Success) { _delegated[breach.PublicKey] = position - amount; _idleCspr += amount; _actions++; }
     }
 
@@ -146,26 +157,52 @@ public sealed class AgentWorker : BackgroundService
             await Propose(validator, amount, undelegate: false, why);
             return;
         }
-        _log.LogInformation("tick {T}: deploying {Amt} CSPR to best validator {V}… ({Note}) — routine, ≤ cap.",
-            _tick, amount, best.PublicKey[..12], best.Note);
+        _log.LogInformation("tick {T}: deploying {Amt} CSPR to best validator {V}… ({Note}) — routine, ≤ cap.", _tick, amount, best.PublicKey[..12], best.Note);
         var r = await _vault.Delegate(validator, Motes(amount));
-        Audit("DELEGATE", best.PublicKey, amount, r);
+        await Audit("DELEGATE", best.PublicKey, amount, r);
         if (r.Success) { _delegated[best.PublicKey] = _delegated.GetValueOrDefault(best.PublicKey) + amount; _idleCspr -= amount; _actions++; }
     }
 
     private async Task Propose(PublicKey validator, decimal amount, bool undelegate, string why)
     {
+        var vHex = validator.ToAccountHex();
         _log.LogInformation("tick {T}: MATERIAL move ({Why}) — proposing on-chain for the human owner to co-sign…", _tick, why);
         var r = await _vault.ProposeMaterial(validator, Motes(amount), undelegate);
-        Audit(undelegate ? "PROPOSE-UNDELEGATE" : "PROPOSE-DELEGATE", validator.ToAccountHex(), amount, r);
-        if (r.Success) _actions++;
+        await Audit(undelegate ? "PROPOSE" : "PROPOSE", vHex, amount, r, extra: $" ({why}) — awaits human co-sign");
+        if (r.Success)
+        {
+            var id = _nextProposalId++;
+            _feed.State.Proposals.Insert(0, new ProposalView(id, vHex, amount, undelegate, r.Hash, false));
+            _actions++;
+        }
     }
 
-    private void Audit(string action, string validator, decimal amountCspr, TxResult r)
+    private async Task Audit(string kind, string validator, decimal amountCspr, TxResult r, string? extra = null)
     {
-        if (r.Success) _log.LogInformation("  ✓ {Action} {Amt} CSPR → {V}…  on-chain: {Url}", action, amountCspr, validator[..12], r.Url);
-        else _log.LogWarning("  ✗ {Action} rejected by the leash: {Err}  ({Url})", action, r.Error, r.Url);
+        if (r.Success)
+        {
+            _log.LogInformation("  ✓ {Kind} {Amt} CSPR → {V}…  on-chain: {Url}", kind, amountCspr, validator[..12], r.Url);
+            await Emit(kind, $"{kind} {amountCspr} CSPR → {validator[..10]}…{extra}", validator, amountCspr, r.Hash, true);
+        }
+        else
+        {
+            _log.LogWarning("  ✗ {Kind} rejected by the leash: {Err}", kind, r.Error);
+            await Emit("REJECT", $"{kind} {amountCspr} CSPR rejected by the leash: {r.Error}", validator, amountCspr, r.Hash, false);
+        }
     }
+
+    private async Task RefreshState(IReadOnlyList<ValidatorMonitor.Assessment> assessments)
+    {
+        _feed.State.Actions = _actions;
+        _feed.State.Buys = _buys;
+        _feed.State.Validators = assessments
+            .Select(a => new ValidatorView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant, _delegated.GetValueOrDefault(a.PublicKey), a.Note))
+            .ToList();
+        await _feed.PushState();
+    }
+
+    private Task Emit(string kind, string message, string? validator = null, decimal? amountCspr = null, string? txHash = null, bool? success = null) =>
+        _feed.Push(new AuditEvent(DateTime.UtcNow.ToString("HH:mm:ss"), _tick, kind, message, validator, amountCspr, txHash, success));
 
     private static ulong Motes(decimal cspr) => (ulong)(cspr * 1_000_000_000m);
 }

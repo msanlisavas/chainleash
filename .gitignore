@@ -14,6 +14,13 @@ contracts/**/target/
 # Node / Angular
 node_modules/
 frontend/dist/
+frontend/**/.angular/
+
+# Dashboard build output (produced by `ng build` into the agent host)
+backend/ChainLeash.Agent/wwwroot/
+
+# Playwright MCP artifacts
+.playwright-mcp/
 
 # OS / tooling junk
 *.stackdump
