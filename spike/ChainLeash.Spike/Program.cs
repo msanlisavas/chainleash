@@ -46,6 +46,7 @@ switch (command)
     case "vault-find": await VaultFind(); break;
     case "vault-init": await VaultInit(); break;
     case "vault-set-validator": await VaultSetValidator(); break;
+    case "vault-state": await VaultState(); break;
     case "vault-bond": await VaultBond(); break;
     case "vault-slash": await VaultSlash(); break;
     case "vault-return-bond": await VaultReturnBond(); break;
@@ -483,6 +484,102 @@ async Task VaultTighten()
         catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
     }
     Console.WriteLine("Timed out.");
+}
+
+// Read the vault's full state from chain with ZERO gas — Odra stores each field in a
+// "state" dictionary keyed by blake2b(index_bytes ++ mapping_data); a top-level field at
+// declaration index i uses index_bytes = [0,0,0,i]. usage: vault-state <package-hash>
+async Task VaultState()
+{
+    var cfg = Config();
+    if (args.Length < 2) { Console.WriteLine("usage: vault-state <package-hash>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    using var http = AuthedHttp(cfg);
+    var node = cfg["NodeRpcUrl"]!;
+
+    async Task<JsonElement> Rpc(string method, object prms)
+    {
+        var body = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method, @params = prms });
+        var resp = await http.PostAsync(node, new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        if (doc.RootElement.TryGetProperty("error", out var err))
+            throw new Exception($"RPC {method}: {err.GetProperty("message").GetString()}");
+        return doc.RootElement.GetProperty("result").Clone();
+    }
+    async Task<JsonElement> Query(string key) =>
+        await Rpc("query_global_state", new { state_identifier = (object?)null, key, path = Array.Empty<string>() });
+
+    // package -> latest contract hash -> named keys (state dict + main purse)
+    var pkgSv = (await Query($"hash-{pkg}")).GetProperty("stored_value");
+    string contractHash;
+    if (pkgSv.TryGetProperty("ContractPackage", out var cp))
+    {
+        var versions = cp.GetProperty("versions").EnumerateArray().ToList();
+        contractHash = versions[^1].GetProperty("contract_hash").GetString()!.Replace("contract-", "");
+    }
+    else { Console.WriteLine("not a contract package"); return; }
+    var contract = (await Query($"hash-{contractHash}")).GetProperty("stored_value").GetProperty("Contract");
+    string Named(string n) => contract.GetProperty("named_keys").EnumerateArray()
+        .First(k => k.GetProperty("name").GetString() == n).GetProperty("key").GetString()!;
+    var stateUref = Named("state");
+    var mainPurse = Named("__contract_main_purse");
+    var srh = (await Rpc("chain_get_state_root_hash", new { })).GetProperty("state_root_hash").GetString()!;
+
+    string Blake2bHex(byte[] data)
+    {
+        var d = new Org.BouncyCastle.Crypto.Digests.Blake2bDigest(256);
+        d.BlockUpdate(data, 0, data.Length);
+        var hash = new byte[32]; d.DoFinal(hash, 0);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+    byte[] IndexBytes(byte i) => new byte[] { 0, 0, 0, i };
+    // Odra stores each Var as a CLValue::Any holding the field's raw bytesrepr; the RPC
+    // returns those bytes in "parsed". Field indices are 1-based (declaration order +1).
+    async Task<byte[]?> ReadBytes(byte index, byte[]? mapKey = null)
+    {
+        var input = mapKey is null ? IndexBytes(index) : IndexBytes(index).Concat(mapKey).ToArray();
+        var itemKey = Blake2bHex(input);
+        try
+        {
+            var r = await Rpc("state_get_dictionary_item", new
+            {
+                state_root_hash = srh,
+                dictionary_identifier = new { URef = new { seed_uref = stateUref, dictionary_item_key = itemKey } }
+            });
+            var parsed = r.GetProperty("stored_value").GetProperty("CLValue").GetProperty("parsed");
+            if (parsed.ValueKind != JsonValueKind.Array) return null;
+            return parsed.EnumerateArray().Select(e => e.GetByte()).ToArray();
+        }
+        catch { return null; } // unset field
+    }
+    async Task<string> Balance(string uref) =>
+        (await Rpc("query_balance", new { purse_identifier = new { purse_uref = uref } })).GetProperty("balance").GetString()!;
+
+    // bytesrepr parsers: U512 = [len][len LE bytes]; u32 = 4 LE bytes; bool = 1 byte.
+    decimal U512Cspr(byte[]? b) {
+        if (b is null || b.Length == 0) return 0;
+        int n = b[0]; System.Numerics.BigInteger v = 0;
+        for (int i = 0; i < n && 1 + i < b.Length; i++) v += (System.Numerics.BigInteger)b[1 + i] << (8 * i);
+        return (decimal)v / 1_000_000_000m;
+    }
+    uint U32(byte[]? b) => b is null || b.Length < 4 ? 0u : (uint)(b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24));
+    bool Bool(byte[]? b) => b is not null && b.Length > 0 && b[0] == 1;
+    decimal Motes(string s) => decimal.Parse(s, System.Globalization.CultureInfo.InvariantCulture) / 1_000_000_000m;
+
+    Console.WriteLine($"--- GovernedVault {pkg[..12]}… (read from chain, no gas) ---");
+    Console.WriteLine($"contract         : {contractHash[..12]}…");
+    var total = Motes(await Balance(mainPurse));
+    var bond = U512Cspr(await ReadBytes(4));
+    Console.WriteLine($"value_cap        : {U512Cspr(await ReadBytes(3)):N0} CSPR/action");
+    Console.WriteLine($"paused           : {Bool(await ReadBytes(11))}");
+    Console.WriteLine($"max_per_validator: {U512Cspr(await ReadBytes(12)):N0} CSPR (0 = unlimited)");
+    Console.WriteLine($"next_proposal_id : {U32(await ReadBytes(6))}");
+    Console.WriteLine($"violations       : {U32(await ReadBytes(5))}");
+    Console.WriteLine($"bond             : {bond:N0} CSPR");
+    Console.WriteLine($"total balance    : {total:N0} CSPR (liquid, incl. bond)");
+    Console.WriteLine($"free (withdrawable): {total - bond:N0} CSPR");
+    foreach (var v in new[] { "0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981", "017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e" })
+        Console.WriteLine($"committed[{v[..10]}…]: {U512Cspr(await ReadBytes(15, Convert.FromHexString(v))):N0} CSPR");
 }
 
 // Post the agent's slashable bond into the vault (payable proxy, like deposit_treasury).
