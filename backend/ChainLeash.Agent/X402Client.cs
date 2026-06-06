@@ -54,6 +54,12 @@ public sealed class X402Client
 
         var ch = await first.Content.ReadFromJsonAsync<ChallengeDto>();
         var amount = ulong.Parse(ch!.maxAmountRequired);
+        // Never overpay a (possibly MITM'd / hostile) provider, and refuse a redirected payTo.
+        var maxFee = _cfg.GetValue<ulong>("X402:MaxFeeMotes", 10_000_000_000UL);
+        if (amount > maxFee) throw new InvalidOperationException($"x402 fee {amount} motes exceeds cap {maxFee}");
+        var providerAh = providerPk.GetAccountHash().Replace("account-hash-", "").ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(ch.payTo) && ch.payTo.Replace("account-hash-", "").ToLowerInvariant() != providerAh)
+            throw new InvalidOperationException("x402 challenge payTo does not match the configured provider");
 
         // Pay the fee over Casper (native transfer to the provider's account).
         var pay = new Transaction.NativeTransferBuilder()
@@ -92,12 +98,15 @@ public sealed class X402Client
         return new Signal(dto!.rate, dto.risk, pay.Hash, amount);
     }
 
+    private NetCasperClient? _rpc;
+    // Shared client — a fresh HttpClient per call leaks sockets over the agent's lifetime.
     private NetCasperClient Rpc()
     {
+        if (_rpc is not null) return _rpc;
         var http = new HttpClient();
         var key = _cfg["Casper:CsprCloudAccessKey"];
         if (!string.IsNullOrWhiteSpace(key)) http.DefaultRequestHeaders.Add("Authorization", key);
-        return new NetCasperClient(_cfg["Casper:NodeRpcUrl"], http);
+        return _rpc = new NetCasperClient(_cfg["Casper:NodeRpcUrl"], http);
     }
 
     private sealed record ChallengeDto(string scheme, string payTo, string maxAmountRequired);

@@ -32,6 +32,8 @@ param(
   [string[]]$Validators = @(),
   [decimal]$DepositCspr = 0,
   [decimal]$BondCspr = 0,
+  [decimal]$MaxPerValidatorCspr = 0,   # per-validator concentration cap (0 = unlimited)
+  [int]$CooldownSec = 30,              # anti-thrash cooldown between agent moves (0 = off)
   [string]$OwnerPublicKeyHex = '',
   [string]$CsprClickAppId = 'csprclick-template'
 )
@@ -87,6 +89,17 @@ if ($DepositCspr -gt 0) {
 if ($BondCspr -gt 0) {
   Write-Host "==> [5/6] Posting $BondCspr CSPR slashable bond..." -ForegroundColor Cyan
   Write-Host (Run-Spike @('vault-bond', $pkg, "$(Motes $BondCspr)"))
+}
+
+# Decentralization controls: per-validator concentration cap (opt-in) + anti-thrash cooldown
+# (on by default) — so a new vault isn't running the weakest posture.
+if ($MaxPerValidatorCspr -gt 0) {
+  Write-Host "==> Setting per-validator cap = $MaxPerValidatorCspr CSPR..." -ForegroundColor Cyan
+  Write-Host (Run-Spike @('vault-set-maxval', $pkg, "$(Motes $MaxPerValidatorCspr)"))
+}
+if ($CooldownSec -gt 0) {
+  Write-Host "==> Setting action cooldown = $CooldownSec s..." -ForegroundColor Cyan
+  Write-Host (Run-Spike @('vault-set-interval', $pkg, "$($CooldownSec * 1000)"))
 }
 
 # 7) Point the agent at the new vault (merge into appsettings.local.json — keeps secrets).

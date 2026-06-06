@@ -203,49 +203,14 @@ public sealed class CasperVault
         return new TxResult(txHash, false, "timeout waiting for on-chain confirmation");
     }
 
-    /// Verify a fetched tx really is approve_material(id) on this package (and, if known,
-    /// initiated by the owner). Returns null if valid, else the rejection reason. The
-    /// entry-point + target checks alone defeat a random-hash forge; the id + initiator
-    /// checks are defence-in-depth and only reject on a definite mismatch (never on a
-    /// parse quirk, so a genuine co-sign is never wrongly rejected).
+    /// Verify a fetched tx really is approve_material(id) on this package, owner-initiated.
+    /// Delegates to the pure, unit-tested CoSignVerifier (fail-closed on every check).
     private string? VerifyApproveMaterial(Transaction tx, uint id)
     {
-        JsonObject? fields, v1;
-        try
-        {
-            v1 = JsonNode.Parse(JsonSerializer.Serialize(tx))?["Version1"]?.AsObject();
-            fields = v1?["payload"]?["fields"]?.AsObject();
-        }
+        JsonObject? root;
+        try { root = JsonNode.Parse(JsonSerializer.Serialize(tx))?.AsObject(); }
         catch (Exception ex) { return $"could not parse tx: {ex.Message}"; }
-        if (fields is null) return "tx has no Version1 payload (not a TransactionV1)";
-
-        if (!string.Equals(fields["entry_point"]?["Custom"]?.GetValue<string>(), "approve_material", StringComparison.OrdinalIgnoreCase))
-            return "tx is not an approve_material call";
-        var addr = fields["target"]?["Stored"]?["id"]?["ByPackageHash"]?["addr"]?.GetValue<string>()?.Replace("hash-", "");
-        if (!string.Equals(addr, _pkg, StringComparison.OrdinalIgnoreCase))
-            return "tx targets a different contract";
-
-        // id arg — reject only on a definite mismatch.
-        try
-        {
-            foreach (var pair in fields["args"]?["Named"]?.AsArray() ?? new JsonArray())
-            {
-                var arr = pair?.AsArray();
-                if (arr is { Count: 2 } && arr[0]?.GetValue<string>() == "id" && arr[1]?["parsed"] is JsonNode p
-                    && (uint)p.GetValue<long>() != id)
-                    return $"tx approves a different proposal";
-            }
-        }
-        catch { /* arg shape varied — entry-point + target already proved authenticity */ }
-
-        // initiator — reject only if we know the owner and it's a definite mismatch.
-        if (_ownerKey is not null)
-        {
-            var initiator = v1?["payload"]?["initiator_addr"]?["PublicKey"]?.GetValue<string>();
-            if (initiator is not null && !string.Equals(initiator, _ownerKey.ToAccountHex(), StringComparison.OrdinalIgnoreCase))
-                return "tx was not initiated by the owner";
-        }
-        return null;
+        return CoSignVerifier.Verify(root, _pkg, id, _ownerKey?.ToAccountHex(), _ownerKey?.GetAccountHash());
     }
 
     private async Task<TxResult> Call(string entryPoint, List<NamedArg> args, ulong paymentMotes = 5_000_000_000UL)
@@ -272,12 +237,16 @@ public sealed class CasperVault
         return new TxResult(tx.Hash, false, "timeout");
     }
 
+    private NetCasperClient? _rpc;
+    // One shared client for the life of the service — a fresh HttpClient per call leaks sockets
+    // in a 24/7 daemon (NetCasperClient isn't IDisposable, so the inner client never closes).
     private NetCasperClient Rpc()
     {
+        if (_rpc is not null) return _rpc;
         var http = new HttpClient();
         var key = _cfg["Casper:CsprCloudAccessKey"];
         if (!string.IsNullOrWhiteSpace(key)) http.DefaultRequestHeaders.Add("Authorization", key);
-        return new NetCasperClient(_cfg["Casper:NodeRpcUrl"], http);
+        return _rpc = new NetCasperClient(_cfg["Casper:NodeRpcUrl"], http);
     }
 }
 

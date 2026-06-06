@@ -232,8 +232,9 @@ public sealed class AgentWorker : BackgroundService
             s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr();
             s.Violations = (int)await _chain.Violations();
             s.AgentGasCspr = _vault.AgentKey is null ? 0 : await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
+            s.Stale = false;
         }
-        catch { /* keep last-known on a transient read failure */ }
+        catch { s.Stale = true; /* keep last-known values, but flag them as possibly stale */ }
         s.Validators = assessments
             .Select(a => new ValidatorView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant, committed.GetValueOrDefault(a.PublicKey), a.Note))
             .ToList();
