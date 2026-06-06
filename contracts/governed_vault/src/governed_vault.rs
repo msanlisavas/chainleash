@@ -125,6 +125,33 @@ pub struct PerValidatorCapSet {
 pub struct ActionIntervalSet {
     pub interval_ms: u64,
 }
+#[odra::event]
+pub struct Initialized {
+    pub agent: Address,
+    pub owner: Address,
+    pub value_cap: U512,
+}
+#[odra::event]
+pub struct OwnershipTransferred {
+    pub old_owner: Address,
+    pub new_owner: Address,
+}
+#[odra::event]
+pub struct AgentRotated {
+    pub old_agent: Address,
+    pub new_agent: Address,
+}
+#[odra::event]
+pub struct BondSlashed {
+    pub amount: U512,
+    pub reason: String,
+    pub remaining: U512,
+}
+#[odra::event]
+pub struct BondReturned {
+    pub to: Address,
+    pub amount: U512,
+}
 
 #[odra::module]
 pub struct GovernedVault {
@@ -137,6 +164,7 @@ pub struct GovernedVault {
     allowlist: Mapping<PublicKey, bool>,
     proposals: Mapping<u32, Proposal>,
     installer: Var<Address>,          // recorded at install (constructor); only it may initialize
+    bond_holder: Var<Address>,        // who posted the bond (return destination)
     // --- richer policy (owner-controlled) ---
     paused: Var<bool>,                // kill-switch: when true, all agent moves revert
     max_per_validator: Var<U512>,     // per-validator stake ceiling (0 = unlimited) — decentralization
@@ -170,6 +198,7 @@ impl GovernedVault {
         self.agent.set(agent);
         self.owner.set(owner);
         self.value_cap.set(value_cap);
+        self.env().emit_event(Initialized { agent, owner, value_cap });
     }
 
     /// Fund the vault with CSPR to be staked (the exchange/treasury deposits here).
@@ -183,9 +212,11 @@ impl GovernedVault {
     #[odra(payable)]
     pub fn deposit_bond(&mut self) {
         let amount = self.env().attached_value();
+        let from = self.env().caller();
         let bond = self.bond.get_or_default() + amount;
         self.bond.set(bond);
-        self.env().emit_event(BondDeposited { from: self.env().caller(), amount, bond });
+        self.bond_holder.set(from); // return destination for return_bond
+        self.env().emit_event(BondDeposited { from, amount, bond });
     }
 
     /// Routine autonomous delegation by the agent — capped + allowlisted.
@@ -318,12 +349,62 @@ impl GovernedVault {
         self.env().emit_event(ActionIntervalSet { interval_ms });
     }
 
-    /// Owner records an on-chain policy violation against the bond.
+    /// Owner records an on-chain policy violation (audit log; no bond movement).
     pub fn record_violation(&mut self, reason: String) {
         self.assert_owner();
         let count = self.violations.get_or_default() + 1;
         self.violations.set(count);
         self.env().emit_event(ViolationRecorded { reason, count });
+    }
+
+    /// Owner transfers ownership — custody-key rotation / desk handover / recovery. Without
+    /// this the treasury would be permanently stranded if the owner key is lost or rotated.
+    pub fn transfer_ownership(&mut self, new_owner: Address) {
+        self.assert_owner();
+        let old_owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        self.owner.set(new_owner);
+        self.env().emit_event(OwnershipTransferred { old_owner, new_owner });
+    }
+
+    /// Owner rotates the agent key — turns "agent compromised" into a recoverable incident
+    /// (pause → set_agent → unpause) instead of a permanently frozen vault.
+    pub fn set_agent(&mut self, new_agent: Address) {
+        self.assert_owner();
+        let old_agent = self.agent.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        self.agent.set(new_agent);
+        self.env().emit_event(AgentRotated { old_agent, new_agent });
+    }
+
+    /// Owner SLASHES (forfeits) part of the agent's bond on a violation — the economic
+    /// teeth of the leash. Capped at the available bond; the forfeited CSPR goes to the
+    /// owner and the violation counter increments. This is the contract-level penalty
+    /// (Casper has no native validator slashing — this is OUR bonded-agent mechanism).
+    pub fn slash_bond(&mut self, amount: U512, reason: String) {
+        self.assert_owner();
+        let owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        let bond = self.bond.get_or_default();
+        let slash = if amount > bond { bond } else { amount };
+        let remaining = bond - slash;
+        self.bond.set(remaining);
+        let count = self.violations.get_or_default() + 1;
+        self.violations.set(count);
+        if slash > U512::zero() {
+            self.env().transfer_tokens(&owner, &slash);
+        }
+        self.env().emit_event(BondSlashed { amount: slash, reason, remaining });
+        self.env().emit_event(ViolationRecorded { reason: String::from("bond slashed"), count });
+    }
+
+    /// Owner returns the remaining bond to the operator who posted it (clean exit).
+    pub fn return_bond(&mut self) {
+        self.assert_owner();
+        let amount = self.bond.get_or_default();
+        let holder = self.bond_holder.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        self.bond.set(U512::zero());
+        if amount > U512::zero() {
+            self.env().transfer_tokens(&holder, &amount);
+        }
+        self.env().emit_event(BondReturned { to: holder, amount });
     }
 
     /// Owner-ONLY withdrawal of free (un-delegated) CSPR from the vault. The
@@ -373,6 +454,34 @@ impl GovernedVault {
     }
     pub fn action_interval(&self) -> u64 {
         self.min_action_interval.get_or_default()
+    }
+    pub fn committed_to(&self, validator: PublicKey) -> U512 {
+        self.committed.get_or_default(&validator)
+    }
+    pub fn get_proposal(&self, id: u32) -> Option<Proposal> {
+        self.proposals.get(&id)
+    }
+    pub fn next_proposal_id(&self) -> u32 {
+        self.next_id.get_or_default()
+    }
+    /// Total liquid CSPR in the vault purse (un-delegated; includes the bond).
+    pub fn total_balance(&self) -> U512 {
+        self.env().self_balance()
+    }
+    /// Free, owner-withdrawable CSPR (liquid balance minus the reserved bond).
+    pub fn free_balance(&self) -> U512 {
+        let bal = self.env().self_balance();
+        let bond = self.bond.get_or_default();
+        if bal > bond { bal - bond } else { U512::zero() }
+    }
+    pub fn get_installer(&self) -> Option<Address> {
+        self.installer.get()
+    }
+    pub fn is_initialized(&self) -> bool {
+        self.agent.get().is_some()
+    }
+    pub fn get_bond_holder(&self) -> Option<Address> {
+        self.bond_holder.get()
     }
 
     // ---- internal ----
@@ -642,6 +751,67 @@ mod tests {
         assert_eq!(vault.try_withdraw(u(100_001)), Err(Error::InsufficientFreeBalance.into()));
         vault.withdraw(u(100_000)); // exactly the free balance, bond stays escrowed
         assert_eq!(vault.bond(), u(3000));
+    }
+
+    #[test]
+    fn owner_can_transfer_ownership_and_rotate_agent() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        let new_owner = env.get_account(2);
+        let new_agent = env.get_account(3);
+        env.set_caller(agent);
+        assert_eq!(vault.try_transfer_ownership(new_owner), Err(Error::NotOwner.into()));
+        env.set_caller(owner);
+        vault.transfer_ownership(new_owner);
+        assert_eq!(vault.get_owner(), new_owner);
+        assert_eq!(vault.try_raise_cap(u(2000)), Err(Error::NotOwner.into())); // old owner powerless
+        env.set_caller(new_owner);
+        vault.set_agent(new_agent);
+        assert_eq!(vault.get_agent(), new_agent);
+        env.set_caller(agent);
+        assert_eq!(vault.try_delegate(v1.clone(), u(500)), Err(Error::NotAgent.into())); // old agent out
+        env.set_caller(new_agent);
+        vault.delegate(v1, u(500)); // rotated agent works
+    }
+
+    #[test]
+    fn slash_bond_forfeits_and_saturates() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.with_tokens(u(3000)).deposit_bond();
+        env.set_caller(agent);
+        assert_eq!(vault.try_slash_bond(u(100), String::from("x")), Err(Error::NotOwner.into()));
+        env.set_caller(owner);
+        vault.slash_bond(u(1000), String::from("policy breach"));
+        assert_eq!(vault.bond(), u(2000));
+        assert_eq!(vault.violations(), 1);
+        vault.slash_bond(u(99999), String::from("severe")); // saturates at remaining bond
+        assert_eq!(vault.bond(), u(0));
+    }
+
+    #[test]
+    fn return_bond_to_holder() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
+        env.set_caller(agent); // the operator posts the bond
+        vault.with_tokens(u(3000)).deposit_bond();
+        assert_eq!(vault.get_bond_holder(), Some(agent));
+        env.set_caller(owner);
+        vault.return_bond();
+        assert_eq!(vault.bond(), u(0));
+    }
+
+    #[test]
+    fn proposal_views_are_chain_readable() {
+        let (env, mut vault, agent, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        assert_eq!(vault.next_proposal_id(), 0);
+        let id = vault.propose_material(v2, u(5000), false);
+        assert_eq!(id, 0);
+        assert_eq!(vault.next_proposal_id(), 1);
+        let p = vault.get_proposal(0).unwrap();
+        assert_eq!(p.amount, u(5000));
+        assert!(!p.resolved);
     }
 
     #[test]

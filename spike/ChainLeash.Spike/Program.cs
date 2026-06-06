@@ -46,6 +46,11 @@ switch (command)
     case "vault-find": await VaultFind(); break;
     case "vault-init": await VaultInit(); break;
     case "vault-set-validator": await VaultSetValidator(); break;
+    case "vault-bond": await VaultBond(); break;
+    case "vault-slash": await VaultSlash(); break;
+    case "vault-return-bond": await VaultReturnBond(); break;
+    case "vault-transfer-owner": await VaultTransferOwner(); break;
+    case "vault-set-agent": await VaultSetAgent(); break;
     case "vault-pause": await VaultPause(); break;
     case "vault-set-maxval": await VaultSetMaxVal(); break;
     case "vault-set-interval": await VaultSetInterval(); break;
@@ -478,6 +483,95 @@ async Task VaultTighten()
         catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
     }
     Console.WriteLine("Timed out.");
+}
+
+// Post the agent's slashable bond into the vault (payable proxy, like deposit_treasury).
+// usage: vault-bond <package-hash> <motes>
+async Task VaultBond()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-bond <package-hash> <motes>"); return; }
+    var pkgBytes = Convert.FromHexString(args[1].Replace("hash-", ""));
+    var motes = ulong.Parse(args[2]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+    var proxyPath = cfg["ProxyCallerWasmPath"] ?? "../../contracts/governed_vault/wasm/proxy_caller.wasm";
+    if (!File.Exists(proxyPath)) { Console.WriteLine($"proxy wasm not found: {proxyPath}"); return; }
+    var proxy = File.ReadAllBytes(proxyPath);
+    var innerArgs = CLValue.List(new[] { CLValue.U8(0), CLValue.U8(0), CLValue.U8(0), CLValue.U8(0) });
+    var rargs = new List<NamedArg>
+    {
+        new NamedArg("package_hash", CLValue.ByteArray(pkgBytes)),
+        new NamedArg("entry_point", CLValue.String("deposit_bond")),
+        new NamedArg("args", innerArgs),
+        new NamedArg("attached_value", CLValue.U512(motes)),
+        new NamedArg("amount", CLValue.U512(motes)),
+    };
+    var tx = new Transaction.SessionBuilder()
+        .From(agentKp.PublicKey).Wasm(proxy).RuntimeArgs(rargs)
+        .ChainName(cfg["ChainName"]!).Payment(20_000_000_000UL, 1).Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Agent posts a {motes / 1_000_000_000m:N0} CSPR slashable bond");
+}
+
+// Owner slashes (forfeits) part of the agent's bond on a violation. usage: vault-slash <pkg> <motes> <reason>
+async Task VaultSlash()
+{
+    var cfg = Config();
+    if (args.Length < 4) { Console.WriteLine("usage: vault-slash <pkg> <motes> <reason>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var motes = ulong.Parse(args[2]);
+    var reason = args[3];
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null).EntryPoint("slash_bond")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("amount", CLValue.U512(motes)), new NamedArg("reason", CLValue.String(reason)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(10_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner slashes {motes / 1_000_000_000m:N0} CSPR of the bond ({reason})");
+}
+
+// Owner returns the remaining bond to the operator. usage: vault-return-bond <pkg>
+async Task VaultReturnBond()
+{
+    var cfg = Config();
+    if (args.Length < 2) { Console.WriteLine("usage: vault-return-bond <pkg>"); return; }
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(args[1].Replace("hash-", ""), null, null).EntryPoint("return_bond")
+        .RuntimeArgs(new List<NamedArg>())
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(10_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, "Owner returns the remaining bond to the operator");
+}
+
+// Owner transfers ownership. usage: vault-transfer-owner <pkg> <newOwnerHex>
+async Task VaultTransferOwner()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-transfer-owner <pkg> <newOwnerHex>"); return; }
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var newOwner = PublicKey.FromHexString(args[2]);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(args[1].Replace("hash-", ""), null, null).EntryPoint("transfer_ownership")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("new_owner", CLValue.KeyFromPublicKey(newOwner)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(10_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner transfers ownership to {args[2][..12]}…");
+}
+
+// Owner rotates the agent key. usage: vault-set-agent <pkg> <newAgentHex>
+async Task VaultSetAgent()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-set-agent <pkg> <newAgentHex>"); return; }
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var newAgent = PublicKey.FromHexString(args[2]);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(args[1].Replace("hash-", ""), null, null).EntryPoint("set_agent")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("new_agent", CLValue.KeyFromPublicKey(newAgent)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(10_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner rotates the agent key to {args[2][..12]}…");
 }
 
 // Owner kill-switch — pause/unpause all agent moves. usage: vault-pause <pkg> <true|false>
