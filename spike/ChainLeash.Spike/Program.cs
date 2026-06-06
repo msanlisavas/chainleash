@@ -48,6 +48,7 @@ switch (command)
     case "vault-set-validator": await VaultSetValidator(); break;
     case "vault-deposit": await VaultDeposit(); break;
     case "vault-delegate": await VaultDelegate(); break;
+    case "vault-undelegate": await VaultUndelegate(); break;
     case "vault-propose": await VaultPropose(); break;
     case "vault-approve": await VaultApprove(); break;
     case "fund": await Fund(); break;
@@ -569,6 +570,34 @@ async Task VaultDelegate()
         .Build();
     tx.Sign(agentKp);
     await Submit(Rpc(cfg), tx, $"Agent delegates {motes / 1_000_000_000m:N0} CSPR to {args[2][..12]}… (from vault purse)");
+}
+
+// Agent undelegates vault-held stake from a validator (routine, ≤ cap). Funds unbond
+// back to the VAULT (not the agent). This is the "rebalance away" / exit path.
+// usage: vault-undelegate <package-hash> <validatorHex> <motes>
+async Task VaultUndelegate()
+{
+    var cfg = Config();
+    if (args.Length < 4) { Console.WriteLine("usage: vault-undelegate <package-hash> <validatorHex> <motes>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var validator = PublicKey.FromHexString(args[2]);
+    var motes = ulong.Parse(args[3]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("undelegate")
+        .RuntimeArgs(new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("amount", CLValue.U512(motes)),
+        })
+        .From(agentKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(30_000_000_000UL, 1)
+        .Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Agent undelegates {motes / 1_000_000_000m:N0} CSPR from {args[2][..12]}… (unbonds back to vault)");
 }
 
 // Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed,
