@@ -138,10 +138,12 @@ opaque discretion — so the policy is deterministic and every decision is on-ch
   chain** (per-action cap, free/total balance, slashable bond, per-validator cap,
   violations, and a prominent kill-switch banner when the owner pauses the agent), a
   live audit feed, the validator-policy view with per-validator committed stake, x402
-  spend, and a human co-sign action for material proposals. It re-syncs the snapshot on
-  reconnect and surfaces a clear banner if the agent API is unreachable. (Today the owner
-  key signs `approve_material` server-side; in-browser CSPR.click / Casper Wallet
-  signing is the planned hardening.)
+  spend, and the human co-sign action. It re-syncs the snapshot on reconnect and surfaces
+  a clear banner if the agent API is unreachable. The owner **co-signs in their own
+  wallet** via CSPR.click: the agent builds the *unsigned* `approve_material` transaction,
+  the owner signs it in Casper Wallet in-browser, and the agent confirms the result
+  on-chain — **the server holds only the owner's public key, never the secret**. (A
+  server-key co-sign path exists for local dev but is **off by default**.)
 
 ## Status
 

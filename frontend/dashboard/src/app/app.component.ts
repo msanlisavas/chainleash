@@ -1,6 +1,8 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
 import * as signalR from '@microsoft/signalr';
+import { WalletService, AppConfig } from './wallet.service';
 
 interface AuditEvent {
   time: string; tick: number; kind: string; message: string;
@@ -34,15 +36,18 @@ export class AppComponent implements OnInit {
 
   events = signal<AuditEvent[]>([]);
   state = signal<FeedState | null>(null);
+  config = signal<AppConfig | null>(null);
   connected = signal(false);
   loadError = signal(false);
-  approving = signal<number | null>(null);
-  approveError = signal<string | null>(null);
+  coSigning = signal<number | null>(null);
+  coSignError = signal<string | null>(null);
 
-  constructor(private http: HttpClient) {}
+  // `wallet` is public so the template reads wallet.activeKey() / wallet.status() directly.
+  constructor(private http: HttpClient, public wallet: WalletService) {}
 
   ngOnInit(): void {
     this.loadState();
+    this.loadConfig();
 
     const conn = new signalR.HubConnectionBuilder()
       .withUrl(`${this.api}/hub/audit`)
@@ -64,12 +69,59 @@ export class AppComponent implements OnInit {
     });
   }
 
-  approve(p: ProposalView): void {
-    this.approving.set(p.id);
-    this.approveError.set(null);
+  /** Fetch public config + boot the CSPR.click wallet SDK (so the owner can co-sign in-wallet). */
+  private loadConfig(): void {
+    this.http.get<AppConfig>(`${this.api}/api/config`).subscribe({
+      next: cfg => { this.config.set(cfg); if (cfg.walletCoSignEnabled) this.wallet.init(cfg); },
+      error: () => { /* config optional; co-sign UI degrades to disabled */ }
+    });
+  }
+
+  async connectWallet(): Promise<void> {
+    this.coSignError.set(null);
+    try { await this.wallet.connect(); }
+    catch (e: any) { this.coSignError.set(e?.message ?? 'connect failed'); }
+  }
+
+  /**
+   * Owner co-signs a material proposal IN THEIR OWN WALLET:
+   * server builds the unsigned approve_material tx → wallet signs + sends → server
+   * confirms the result on-chain. The owner key never touches the server.
+   */
+  async coSignWallet(p: ProposalView): Promise<void> {
+    this.coSigning.set(p.id);
+    this.coSignError.set(null);
+    try {
+      const cfg = this.config();
+      if (!cfg?.ownerPublicKey) throw new Error('no owner account configured');
+
+      let key = this.wallet.activeKey();
+      if (!key) key = await this.wallet.connect();
+      if (!key) throw new Error('connect the owner wallet first');
+      if (key.toLowerCase() !== cfg.ownerPublicKey.toLowerCase())
+        throw new Error('connected wallet is not the owner account');
+
+      const prep = await firstValueFrom(
+        this.http.get<{ transactionJson: unknown; ownerPublicKey: string }>(`${this.api}/api/approve/${p.id}/prepare`));
+      const hash = await this.wallet.send(prep.transactionJson, prep.ownerPublicKey);
+      const res = await firstValueFrom(
+        this.http.post<{ success: boolean; hash: string; error?: string }>(
+          `${this.api}/api/approve/${p.id}/confirm`, { txHash: hash }));
+      if (!res.success) this.coSignError.set(res.error ?? 'on-chain confirm failed');
+    } catch (e: any) {
+      this.coSignError.set(e?.message ?? 'co-sign failed');
+    } finally {
+      this.coSigning.set(null);
+    }
+  }
+
+  /** Dev fallback: server-key co-sign (only available when the agent enables it). */
+  approveServerKey(p: ProposalView): void {
+    this.coSigning.set(p.id);
+    this.coSignError.set(null);
     this.http.post<{ success: boolean; error?: string }>(`${this.api}/api/approve/${p.id}`, {}).subscribe({
-      next: r => { this.approving.set(null); if (!r.success) this.approveError.set(r.error ?? 'co-sign failed'); },
-      error: () => { this.approving.set(null); this.approveError.set('co-sign request failed'); }
+      next: r => { this.coSigning.set(null); if (!r.success) this.coSignError.set(r.error ?? 'co-sign failed'); },
+      error: () => { this.coSigning.set(null); this.coSignError.set('co-sign request failed'); }
     });
   }
 

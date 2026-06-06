@@ -61,6 +61,7 @@ switch (command)
     case "vault-redelegate": await VaultRedelegate(); break;
     case "vault-propose": await VaultPropose(); break;
     case "vault-approve": await VaultApprove(); break;
+    case "cosign-prepare": await CosignPrepare(); break;
     case "fund": await Fund(); break;
     case "setup-keys": await SetupKeys(); break;
 
@@ -928,6 +929,32 @@ async Task VaultApprove()
 
 // Native CSPR transfer from the agent to another account (e.g. top up the human for gas).
 // usage: fund <agent|human|HEX> <motes>
+async Task CosignPrepare()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: cosign-prepare <package-hash> <id> [ownerPubkeyHex]"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var id = uint.Parse(args[2]);
+    var ownerHex = args.Length > 3
+        ? args[3]
+        : File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim();
+    var owner = PublicKey.FromHexString(ownerHex);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("approve_material")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) })
+        .From(owner)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(30_000_000_000UL, 1)
+        .Build(); // NOT signed — the owner's wallet adds the signature in-browser
+
+    var json = JsonSerializer.Serialize(tx, new JsonSerializerOptions { WriteIndented = true });
+    Console.WriteLine($"--- unsigned approve_material(#{id}) for owner {ownerHex[..12]}… ---");
+    Console.WriteLine(json);
+    await Task.CompletedTask;
+}
+
 async Task Fund()
 {
     var cfg = Config();

@@ -75,7 +75,27 @@
     </section>
 
     <section class="panel">
-      <h2>Material proposals <small>need a human co-sign</small></h2>
+      <h2>Material proposals <small>co-signed in the owner's own wallet</small></h2>
+
+      @if (config()?.walletCoSignEnabled) {
+        <div class="wallet">
+          @if (wallet.activeKey(); as wk) {
+            <span class="pill" [class.ok]="wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase()"
+                  [class.bad]="wk.toLowerCase() !== config()?.ownerPublicKey?.toLowerCase()">
+              {{ wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase() ? 'owner wallet connected' : 'wrong account' }}
+            </span>
+            <span class="vk">{{ short(wk) }}</span>
+          } @else if (wallet.status() === 'ready') {
+            <button class="link" (click)="connectWallet()">Connect owner wallet</button>
+          } @else if (wallet.status() === 'unavailable') {
+            <span class="muted">no wallet detected — install Casper Wallet</span>
+          } @else {
+            <span class="muted">loading wallet…</span>
+          }
+          <span class="owner">owner {{ short(config()?.ownerPublicKey ?? '') }}</span>
+        </div>
+      }
+
       @for (p of pendingProposals(); track p.id) {
         <div class="proposal">
           <div class="row">
@@ -83,14 +103,19 @@
             <a class="tx" href="https://testnet.cspr.live/transaction/{{ p.txHash }}" target="_blank">↗</a>
           </div>
           <div class="vk">→ {{ short(p.validator) }}</div>
-          <button (click)="approve(p)" [disabled]="approving() === p.id">
-            {{ approving() === p.id ? 'co-signing…' : 'Co-sign (owner)' }}
-          </button>
+          @if (config()?.walletCoSignEnabled) {
+            <button (click)="coSignWallet(p)" [disabled]="coSigning() === p.id">
+              {{ coSigning() === p.id ? 'co-signing in wallet…' : 'Co-sign in wallet (owner)' }}
+            </button>
+          }
+          @if (config()?.allowServerKeyCoSign) {
+            <button class="ghost" (click)="approveServerKey(p)" [disabled]="coSigning() === p.id">dev: server-key co-sign</button>
+          }
         </div>
       } @empty {
         <p class="empty">No moves awaiting co-sign — the agent is operating within its leash.</p>
       }
-      @if (approveError()) { <p class="err-line">Co-sign failed: {{ approveError() }}</p> }
+      @if (coSignError()) { <p class="err-line">Co-sign failed: {{ coSignError() }}</p> }
     </section>
   </aside>
 </main>

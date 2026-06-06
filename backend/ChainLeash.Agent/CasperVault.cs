@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Casper.Network.SDK;
 using Casper.Network.SDK.Types;
 
@@ -13,15 +15,27 @@ public sealed class CasperVault
     private readonly IConfiguration _cfg;
     private readonly KeyPair _agentKp;
     private readonly string _pkg;
+    private readonly PublicKey? _ownerKey;
 
     public CasperVault(IConfiguration cfg)
     {
         _cfg = cfg;
         _agentKp = KeyPair.FromPem(cfg["Casper:AgentSecretKeyPath"]!);
         _pkg = cfg["Casper:GovernedVaultPackageHash"]!.Replace("hash-", "");
+        var ownerHex = cfg["Casper:OwnerPublicKeyHex"];
+        if (!string.IsNullOrWhiteSpace(ownerHex) && !ownerHex.StartsWith("<"))
+            _ownerKey = PublicKey.FromHexString(ownerHex);
     }
 
     public PublicKey AgentKey => _agentKp.PublicKey;
+
+    /// The owner (human / institution) account that co-signs material moves. The server
+    /// holds only this PUBLIC key — the secret never leaves the owner's wallet.
+    public PublicKey? OwnerKey => _ownerKey;
+
+    /// Whether the legacy server-key co-sign fallback is enabled (dev only). Default OFF:
+    /// in production the owner co-signs in their own wallet, so the server holds no owner key.
+    public bool AllowServerKeyCoSign => _cfg.GetValue("Casper:AllowServerKeyCoSign", false);
 
     /// Routine autonomous delegation (≤ cap, validator must be allowlisted).
     /// The chain reverts with OverCap/ValidatorNotAllowed if the leash is exceeded.
@@ -125,6 +139,52 @@ public sealed class CasperVault
             if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
         }
         return new TxResult(tx.Hash, false, "timeout");
+    }
+
+    /// Build the UNSIGNED approve_material(id) transaction for the owner to sign in their
+    /// browser wallet. Returns the JSON shape CSPR.click `send()` / Casper Wallet
+    /// `signTransactionV1` expect: {"transaction":{"Version1":{…}}}. The server constructs
+    /// the tx but never signs it — the owner's key stays in the wallet. approve_material is
+    /// owner-gated on-chain, so only the owner's signature can make it succeed.
+    public string BuildUnsignedApproveMaterialJson(uint id)
+    {
+        if (_ownerKey is null) throw new InvalidOperationException("no owner public key configured (Casper:OwnerPublicKeyHex)");
+
+        var tx = new Transaction.ContractCallBuilder()
+            .ByPackageHash(_pkg, null, null)
+            .EntryPoint("approve_material")
+            .RuntimeArgs(new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) })
+            .From(_ownerKey)
+            .ChainName(_cfg["Casper:ChainName"]!)
+            .Payment(30_000_000_000UL, 1)
+            .Build(); // NOT signed — the wallet adds the owner's signature
+
+        // The C# SDK serializes a Transaction as {"Deploy":null,"Version1":{…}}. Lift the
+        // Version1 node and wrap it the way the wallet SDKs consume it.
+        var root = JsonNode.Parse(JsonSerializer.Serialize(tx))!.AsObject();
+        var v1 = root["Version1"]!.DeepClone();
+        var wrapped = new JsonObject { ["transaction"] = new JsonObject { ["Version1"] = v1 } };
+        return wrapped.ToJsonString();
+    }
+
+    /// Confirm a wallet-submitted co-sign: verify on-chain that the tx executed
+    /// successfully. Because approve_material is owner-gated in the contract, success
+    /// proves the owner signed it — the server doesn't need to (and can't) hold the key.
+    public async Task<TxResult> ConfirmCoSign(string txHash)
+    {
+        if (string.IsNullOrWhiteSpace(txHash)) return new TxResult("", false, "missing txHash");
+        var client = Rpc();
+        for (var i = 0; i < 24; i++)
+        {
+            try
+            {
+                var er = (await client.GetTransaction(txHash, CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+                if (er is not null) return new TxResult(txHash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
+            }
+            catch { /* not yet visible to this node — keep polling */ }
+            await Task.Delay(5000);
+        }
+        return new TxResult(txHash, false, "timeout waiting for on-chain confirmation");
     }
 
     private async Task<TxResult> Call(string entryPoint, List<NamedArg> args, ulong paymentMotes = 5_000_000_000UL)
