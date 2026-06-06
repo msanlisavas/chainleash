@@ -1,16 +1,23 @@
-//! CHAINLEASH GovernedVault.
+//! CHAINLEASH GovernedVault — the chain-enforced leash over CSPR staking.
 //!
-//! Holds the treasury (native CSPR) and enforces the agent's authority ON-CHAIN:
-//! a per-action value cap + a counterparty allowlist on autonomous settlements,
-//! a propose→human-approve path for over-cap (material) moves, a slashable bond,
-//! and a per-decision CES event trail. The cap is enforced by the deployed
-//! contract — not by any server — so a compromised agent backend physically
-//! cannot exceed it. The `agent` and `owner` are distinct accounts so the
-//! contract can require the human (`owner`) for material approvals and authority
-//! increases, while the agent can only act routinely and tighten (never raise)
-//! its own cap.
+//! The vault HOLDS the treasury's CSPR and DELEGATES it to validators on the
+//! agent's instruction — but the chain (this deployed contract) enforces the
+//! limits, not any server:
+//!   * per-action value cap on how much the agent can (un)delegate at once,
+//!   * a validator ALLOWLIST (the agent can only stake to approved validators),
+//!   * a propose -> human-approve flow for over-cap "material" moves,
+//!   * a slashable CSPR bond,
+//!   * and crucially: the AGENT HAS NO WITHDRAW PATH. It can rebalance stake
+//!     among approved validators within the cap, but can NEVER move CSPR out of
+//!     the vault. Only the owner (human/exchange) can withdraw. So a fully
+//!     compromised agent can mis-delegate within the leash — it cannot steal.
+//!
+//! Combined with the treasury account's native weighted keys (agent key below
+//! the key_management threshold), the agent also cannot raise its own authority
+//! or seize the bond. Built for real Casper staking — Casper's actual on-chain
+//! economic primitive — not a fictional DeFi venue.
 
-use odra::casper_types::U512;
+use odra::casper_types::{PublicKey, U512};
 use odra::prelude::*;
 
 #[odra::odra_error]
@@ -19,98 +26,99 @@ pub enum Error {
     NotAgent = 2,
     NotOwner = 3,
     OverCap = 4,
-    CounterpartyNotAllowed = 5,
-    InsufficientTreasury = 6,
-    CapNotLower = 7,
-    NoSuchProposal = 8,
-    ProposalAlreadyResolved = 9,
-    AlreadyInitialized = 10,
+    ValidatorNotAllowed = 5,
+    NoSuchProposal = 6,
+    ProposalAlreadyResolved = 7,
+    AlreadyInitialized = 8,
+    CapNotLower = 9,
+    InsufficientFreeBalance = 10,
 }
 
+/// A pending over-cap (material) staking move awaiting owner approval.
 #[odra::odra_type]
 pub struct Proposal {
-    pub counterparty: Address,
+    pub validator: PublicKey,
     pub amount: U512,
+    pub undelegate: bool, // false = delegate, true = undelegate
     pub resolved: bool,
 }
 
 #[odra::event]
-pub struct TreasuryDeposited {
+pub struct Funded {
     pub from: Address,
     pub amount: U512,
-    pub treasury: U512,
 }
-
 #[odra::event]
 pub struct BondDeposited {
     pub from: Address,
     pub amount: U512,
     pub bond: U512,
 }
-
 #[odra::event]
-pub struct Settled {
-    pub counterparty: Address,
+pub struct Delegated {
+    pub validator: PublicKey,
     pub amount: U512,
-    pub treasury: U512,
 }
-
+#[odra::event]
+pub struct Undelegated {
+    pub validator: PublicKey,
+    pub amount: U512,
+}
 #[odra::event]
 pub struct MaterialProposed {
     pub id: u32,
-    pub counterparty: Address,
+    pub validator: PublicKey,
     pub amount: U512,
+    pub undelegate: bool,
 }
-
 #[odra::event]
 pub struct MaterialExecuted {
     pub id: u32,
-    pub counterparty: Address,
+    pub validator: PublicKey,
     pub amount: U512,
 }
-
 #[odra::event]
 pub struct CapTightened {
     pub old_cap: U512,
     pub new_cap: U512,
 }
-
 #[odra::event]
 pub struct CapRaised {
     pub old_cap: U512,
     pub new_cap: U512,
 }
-
 #[odra::event]
-pub struct AllowlistSet {
-    pub counterparty: Address,
+pub struct ValidatorAllowed {
+    pub validator: PublicKey,
     pub allowed: bool,
 }
-
 #[odra::event]
 pub struct ViolationRecorded {
     pub reason: String,
     pub count: u32,
+}
+#[odra::event]
+pub struct Withdrawn {
+    pub to: Address,
+    pub amount: U512,
 }
 
 #[odra::module]
 pub struct GovernedVault {
     agent: Var<Address>,
     owner: Var<Address>,
-    value_cap: Var<U512>,
-    treasury: Var<U512>,
+    value_cap: Var<U512>, // max CSPR the agent may (un)delegate per action
     bond: Var<U512>,
     violations: Var<u32>,
     next_id: Var<u32>,
-    allowlist: Mapping<Address, bool>,
+    allowlist: Mapping<PublicKey, bool>,
     proposals: Mapping<u32, Proposal>,
 }
 
 #[odra::module]
 impl GovernedVault {
-    /// One-time initialization, called once after deploy via a normal contract call
-    /// (deliberately NOT an Odra constructor, so the contract installs with no
-    /// constructor args). Reverts if already initialized.
+    /// One-time init (called once after deploy via a normal call; not an Odra
+    /// constructor, so install needs no constructor args).
     pub fn initialize(&mut self, agent: Address, owner: Address, value_cap: U512) {
         if self.agent.get().is_some() {
             self.env().revert(Error::AlreadyInitialized);
@@ -120,87 +128,67 @@ impl GovernedVault {
         self.value_cap.set(value_cap);
     }
 
-    /// Fund the treasury with attached CSPR.
+    /// Fund the vault with CSPR to be staked (the exchange/treasury deposits here).
     #[odra(payable)]
     pub fn deposit_treasury(&mut self) {
         let amount = self.env().attached_value();
-        let treasury = self.treasury.get_or_default() + amount;
-        self.treasury.set(treasury);
-        self.env().emit_event(TreasuryDeposited {
-            from: self.env().caller(),
-            amount,
-            treasury,
-        });
+        self.env().emit_event(Funded { from: self.env().caller(), amount });
     }
 
-    /// Post the agent's slashable bond with attached CSPR.
+    /// Post the agent's slashable bond.
     #[odra(payable)]
     pub fn deposit_bond(&mut self) {
         let amount = self.env().attached_value();
         let bond = self.bond.get_or_default() + amount;
         self.bond.set(bond);
-        self.env().emit_event(BondDeposited {
-            from: self.env().caller(),
-            amount,
-            bond,
-        });
+        self.env().emit_event(BondDeposited { from: self.env().caller(), amount, bond });
     }
 
-    /// Routine autonomous settlement by the agent. Reverts if over the cap,
-    /// to a non-allowlisted counterparty, or beyond the treasury.
-    pub fn settle(&mut self, counterparty: Address, amount: U512) {
+    /// Routine autonomous delegation by the agent — capped + allowlisted.
+    pub fn delegate(&mut self, validator: PublicKey, amount: U512) {
         self.assert_agent();
-        if amount > self.value_cap.get_or_default() {
-            self.env().revert(Error::OverCap);
-        }
-        self.do_transfer(counterparty, amount);
-        self.env().emit_event(Settled {
-            counterparty,
-            amount,
-            treasury: self.treasury.get_or_default(),
-        });
+        self.assert_within_cap(amount);
+        self.assert_validator_allowed(&validator);
+        self.env().delegate(validator.clone(), amount);
+        self.env().emit_event(Delegated { validator, amount });
     }
 
-    /// Agent proposes an over-cap (material) move; it does not execute until the
-    /// owner approves. Returns the proposal id.
-    pub fn propose_material(&mut self, counterparty: Address, amount: U512) -> u32 {
+    /// Routine autonomous undelegation by the agent — capped. Funds return to
+    /// the VAULT (after unbonding), never to the agent; the agent cannot drain.
+    pub fn undelegate(&mut self, validator: PublicKey, amount: U512) {
+        self.assert_agent();
+        self.assert_within_cap(amount);
+        self.env().undelegate(validator.clone(), amount);
+        self.env().emit_event(Undelegated { validator, amount });
+    }
+
+    /// Agent proposes an over-cap (material) (un)delegation; executes only after
+    /// the owner approves. Returns the proposal id.
+    pub fn propose_material(&mut self, validator: PublicKey, amount: U512, undelegate: bool) -> u32 {
         self.assert_agent();
         let id = self.next_id.get_or_default();
         self.next_id.set(id + 1);
-        self.proposals.set(
-            &id,
-            Proposal {
-                counterparty,
-                amount,
-                resolved: false,
-            },
-        );
-        self.env().emit_event(MaterialProposed {
-            id,
-            counterparty,
-            amount,
-        });
+        self.proposals.set(&id, Proposal { validator: validator.clone(), amount, undelegate, resolved: false });
+        self.env().emit_event(MaterialProposed { id, validator, amount, undelegate });
         id
     }
 
-    /// Owner (human) approves and executes a pending material move.
+    /// Owner (human/exchange) approves and executes a pending material move.
     pub fn approve_material(&mut self, id: u32) {
         self.assert_owner();
-        let mut proposal = self
-            .proposals
-            .get(&id)
-            .unwrap_or_revert_with(self, Error::NoSuchProposal);
-        if proposal.resolved {
+        let mut p = self.proposals.get(&id).unwrap_or_revert_with(self, Error::NoSuchProposal);
+        if p.resolved {
             self.env().revert(Error::ProposalAlreadyResolved);
         }
-        self.do_transfer(proposal.counterparty, proposal.amount);
-        proposal.resolved = true;
-        self.env().emit_event(MaterialExecuted {
-            id,
-            counterparty: proposal.counterparty,
-            amount: proposal.amount,
-        });
-        self.proposals.set(&id, proposal);
+        if p.undelegate {
+            self.env().undelegate(p.validator.clone(), p.amount);
+        } else {
+            self.assert_validator_allowed(&p.validator);
+            self.env().delegate(p.validator.clone(), p.amount);
+        }
+        p.resolved = true;
+        self.env().emit_event(MaterialExecuted { id, validator: p.validator.clone(), amount: p.amount });
+        self.proposals.set(&id, p);
     }
 
     /// Agent/overseer may only LOWER the cap (tighten the leash).
@@ -214,7 +202,7 @@ impl GovernedVault {
         self.env().emit_event(CapTightened { old_cap, new_cap });
     }
 
-    /// Only the owner (human) may RAISE the cap.
+    /// Only the owner may RAISE the cap.
     pub fn raise_cap(&mut self, new_cap: U512) {
         self.assert_owner();
         let old_cap = self.value_cap.get_or_default();
@@ -222,14 +210,11 @@ impl GovernedVault {
         self.env().emit_event(CapRaised { old_cap, new_cap });
     }
 
-    /// Owner manages the counterparty allowlist.
-    pub fn set_allowlist(&mut self, counterparty: Address, allowed: bool) {
+    /// Owner manages the validator allowlist.
+    pub fn set_validator(&mut self, validator: PublicKey, allowed: bool) {
         self.assert_owner();
-        self.allowlist.set(&counterparty, allowed);
-        self.env().emit_event(AllowlistSet {
-            counterparty,
-            allowed,
-        });
+        self.allowlist.set(&validator, allowed);
+        self.env().emit_event(ValidatorAllowed { validator, allowed });
     }
 
     /// Owner records an on-chain policy violation against the bond.
@@ -238,6 +223,15 @@ impl GovernedVault {
         let count = self.violations.get_or_default() + 1;
         self.violations.set(count);
         self.env().emit_event(ViolationRecorded { reason, count });
+    }
+
+    /// Owner-ONLY withdrawal of free (un-delegated) CSPR from the vault. The
+    /// agent has no equivalent — this is the "agent cannot steal" guarantee.
+    pub fn withdraw(&mut self, amount: U512) {
+        self.assert_owner();
+        let owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        self.env().transfer_tokens(&owner, &amount);
+        self.env().emit_event(Withdrawn { to: owner, amount });
     }
 
     // ---- views ----
@@ -250,17 +244,17 @@ impl GovernedVault {
     pub fn value_cap(&self) -> U512 {
         self.value_cap.get_or_default()
     }
-    pub fn treasury(&self) -> U512 {
-        self.treasury.get_or_default()
-    }
     pub fn bond(&self) -> U512 {
         self.bond.get_or_default()
     }
     pub fn violations(&self) -> u32 {
         self.violations.get_or_default()
     }
-    pub fn is_allowed(&self, counterparty: Address) -> bool {
-        self.allowlist.get_or_default(&counterparty)
+    pub fn is_validator_allowed(&self, validator: PublicKey) -> bool {
+        self.allowlist.get_or_default(&validator)
+    }
+    pub fn delegated_to(&self, validator: PublicKey) -> U512 {
+        self.env().delegated_amount(validator)
     }
 
     // ---- internal ----
@@ -270,24 +264,21 @@ impl GovernedVault {
             self.env().revert(Error::NotAgent);
         }
     }
-
     fn assert_owner(&self) {
         let owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
         if self.env().caller() != owner {
             self.env().revert(Error::NotOwner);
         }
     }
-
-    fn do_transfer(&mut self, counterparty: Address, amount: U512) {
-        if !self.allowlist.get_or_default(&counterparty) {
-            self.env().revert(Error::CounterpartyNotAllowed);
+    fn assert_within_cap(&self, amount: U512) {
+        if amount > self.value_cap.get_or_default() {
+            self.env().revert(Error::OverCap);
         }
-        let treasury = self.treasury.get_or_default();
-        if amount > treasury {
-            self.env().revert(Error::InsufficientTreasury);
+    }
+    fn assert_validator_allowed(&self, validator: &PublicKey) {
+        if !self.allowlist.get_or_default(validator) {
+            self.env().revert(Error::ValidatorNotAllowed);
         }
-        self.treasury.set(treasury - amount);
-        self.env().transfer_tokens(&counterparty, &amount);
     }
 }
 
@@ -297,85 +288,79 @@ mod tests {
     use odra::host::{Deployer, HostRef, NoArgs};
 
     fn u(n: u64) -> U512 {
-        U512::from(n)
+        U512::from(n) * U512::from(1_000_000_000u64) // n CSPR, in motes
     }
 
-    fn setup() -> (odra::host::HostEnv, GovernedVaultHostRef, Address, Address, Address) {
+    // env.get_validator(n) returns a validator pre-registered in the test VM.
+    fn setup() -> (odra::host::HostEnv, GovernedVaultHostRef, Address, Address, PublicKey, PublicKey) {
         let env = odra_test::env();
         let owner = env.get_account(0);
         let agent = env.get_account(1);
-        let counterparty = env.get_account(2);
+        let v1 = env.get_validator(0);
+        let v2 = env.get_validator(1);
         let mut vault = GovernedVault::deploy(&env, NoArgs);
         vault.initialize(agent, owner, u(1000));
         env.set_caller(owner);
-        vault.set_allowlist(counterparty, true);
+        vault.set_validator(v1.clone(), true);
         env.set_caller(owner);
-        vault.with_tokens(u(10_000)).deposit_treasury();
-        (env, vault, agent, owner, counterparty)
+        vault.with_tokens(u(100_000)).deposit_treasury();
+        (env, vault, agent, owner, v1, v2)
     }
 
     #[test]
     fn init_state() {
-        let (_env, vault, agent, owner, _cp) = setup();
+        let (_e, vault, agent, owner, _v1, _v2) = setup();
         assert_eq!(vault.get_agent(), agent);
         assert_eq!(vault.get_owner(), owner);
         assert_eq!(vault.value_cap(), u(1000));
-        assert_eq!(vault.treasury(), u(10_000));
     }
 
     #[test]
-    fn settle_under_cap_succeeds() {
-        let (env, mut vault, agent, _owner, cp) = setup();
+    fn delegate_under_cap_to_allowed_validator() {
+        let (env, mut vault, agent, _o, v1, _v2) = setup();
         env.set_caller(agent);
-        vault.settle(cp, u(800));
-        assert_eq!(vault.treasury(), u(9_200));
+        vault.delegate(v1.clone(), u(800));
+        assert_eq!(vault.delegated_to(v1), u(800));
     }
 
     #[test]
-    fn settle_over_cap_reverts() {
-        let (env, mut vault, agent, _owner, cp) = setup();
+    fn delegate_over_cap_reverts() {
+        let (env, mut vault, agent, _o, v1, _v2) = setup();
         env.set_caller(agent);
-        assert_eq!(vault.try_settle(cp, u(1_001)), Err(Error::OverCap.into()));
+        assert_eq!(vault.try_delegate(v1, u(1001)), Err(Error::OverCap.into()));
     }
 
     #[test]
-    fn settle_to_non_allowlisted_reverts() {
-        let (env, mut vault, agent, _owner, _cp) = setup();
-        let stranger = env.get_account(3);
+    fn delegate_to_unapproved_validator_reverts() {
+        let (env, mut vault, agent, _o, _v1, v2) = setup();
         env.set_caller(agent);
-        assert_eq!(
-            vault.try_settle(stranger, u(100)),
-            Err(Error::CounterpartyNotAllowed.into())
-        );
+        assert_eq!(vault.try_delegate(v2, u(500)), Err(Error::ValidatorNotAllowed.into()));
     }
 
     #[test]
-    fn settle_by_non_agent_reverts() {
-        let (env, mut vault, _agent, owner, cp) = setup();
+    fn delegate_by_non_agent_reverts() {
+        let (env, mut vault, _a, owner, v1, _v2) = setup();
         env.set_caller(owner);
-        assert_eq!(vault.try_settle(cp, u(100)), Err(Error::NotAgent.into()));
+        assert_eq!(vault.try_delegate(v1, u(500)), Err(Error::NotAgent.into()));
     }
 
     #[test]
     fn material_propose_then_owner_approves() {
-        let (env, mut vault, agent, owner, cp) = setup();
+        let (env, mut vault, agent, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
         env.set_caller(agent);
-        let id = vault.propose_material(cp, u(5_000));
-        // agent cannot self-approve
+        let id = vault.propose_material(v2.clone(), u(5000), false); // over cap
         assert_eq!(vault.try_approve_material(id), Err(Error::NotOwner.into()));
         env.set_caller(owner);
         vault.approve_material(id);
-        assert_eq!(vault.treasury(), u(5_000));
-        // cannot approve twice
-        assert_eq!(
-            vault.try_approve_material(id),
-            Err(Error::ProposalAlreadyResolved.into())
-        );
+        assert_eq!(vault.delegated_to(v2), u(5000));
+        assert_eq!(vault.try_approve_material(id), Err(Error::ProposalAlreadyResolved.into()));
     }
 
     #[test]
     fn tighten_only_down() {
-        let (env, mut vault, agent, _owner, _cp) = setup();
+        let (env, mut vault, agent, _o, _v1, _v2) = setup();
         env.set_caller(agent);
         vault.tighten_cap(u(500));
         assert_eq!(vault.value_cap(), u(500));
@@ -384,22 +369,31 @@ mod tests {
 
     #[test]
     fn only_owner_raises_cap() {
-        let (env, mut vault, agent, owner, _cp) = setup();
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
         env.set_caller(agent);
-        assert_eq!(vault.try_raise_cap(u(2_000)), Err(Error::NotOwner.into()));
+        assert_eq!(vault.try_raise_cap(u(2000)), Err(Error::NotOwner.into()));
         env.set_caller(owner);
-        vault.raise_cap(u(2_000));
-        assert_eq!(vault.value_cap(), u(2_000));
+        vault.raise_cap(u(2000));
+        assert_eq!(vault.value_cap(), u(2000));
+    }
+
+    #[test]
+    fn agent_cannot_withdraw_only_owner_can() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
+        env.set_caller(agent);
+        assert_eq!(vault.try_withdraw(u(100)), Err(Error::NotOwner.into()));
+        env.set_caller(owner);
+        vault.withdraw(u(100));
     }
 
     #[test]
     fn bond_and_violations() {
-        let (env, mut vault, _agent, owner, _cp) = setup();
+        let (env, mut vault, _a, owner, _v1, _v2) = setup();
         env.set_caller(owner);
-        vault.with_tokens(u(3_000)).deposit_bond();
-        assert_eq!(vault.bond(), u(3_000));
+        vault.with_tokens(u(3000)).deposit_bond();
+        assert_eq!(vault.bond(), u(3000));
         env.set_caller(owner);
-        vault.record_violation(String::from("velocity anomaly"));
+        vault.record_violation(String::from("commission hike"));
         assert_eq!(vault.violations(), 1);
     }
 }
