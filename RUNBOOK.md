@@ -50,7 +50,14 @@ docker run --rm -v "$PWD/contracts/governed_vault:/work" \
 
 ## 2. Deploy + arm your own vault — one command
 
+```bash
+# Linux / macOS
+./scripts/onboard.sh --cap 600 \
+  --validators 0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981,017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e \
+  --deposit 1000 --bond 300
+```
 ```powershell
+# Windows (PowerShell)
 ./scripts/onboard.ps1 -CapCspr 600 `
   -Validators @('0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981',
                 '017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e') `

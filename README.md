@@ -69,7 +69,14 @@ The same engine serves a 10M-CSPR individual and a 500M-CSPR institution; only t
 cap, allowlist, bond, and policy params differ. Each holder runs **their own vault**,
 and standing one up is **one command**:
 
+```bash
+# Linux / macOS
+./scripts/onboard.sh --cap 600 \
+  --validators 0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981,017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e \
+  --deposit 1000 --bond 300
+```
 ```powershell
+# Windows (PowerShell)
 ./scripts/onboard.ps1 -CapCspr 600 `
   -Validators @('0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981',
                 '017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e') `
@@ -161,15 +168,19 @@ note the demo vault is bound on-chain to *my* agent key, so **only its owner can
 To watch the agent delegate/redelegate/escalate, deploy your **own** vault — its agent key
 is yours, so the chain accepts its moves:
 
-```powershell
+```bash
 # 1) generate keys, fund BOTH at the faucet (~600+ CSPR for the agent: ~500 is install gas)
-cd spike/ChainLeash.Spike; dotnet run -- keygen
+cd spike/ChainLeash.Spike && dotnet run -- keygen
 #    faucet: https://testnet.cspr.live/tools/faucet  (you may need several requests)
 # 2) put your CSPR.cloud key in spike/.../Config/settings.local.json, then deploy + arm:
-./scripts/onboard.ps1 -CapCspr 600 -Validators @('<validatorHex>') -DepositCspr 1000 -BondCspr 300
+./scripts/onboard.sh --cap 600 --validators <validatorHex> --deposit 1000 --bond 300
+#    (Windows: ./scripts/onboard.ps1 -CapCspr 600 -Validators @('<validatorHex>') -DepositCspr 1000 -BondCspr 300)
 # 3) run the stack — it now points at YOUR vault
 docker compose up --build
 ```
+
+Runs on Linux, macOS, and Windows — the agent, contracts, dashboard, and `docker compose`
+are all cross-platform; only the onboarding script has a per-shell variant (`.sh` / `.ps1`).
 
 The agent's audit feed is **persisted** across restarts, and secrets are mounted read-only —
 never baked into an image. (Local dev without Docker: run `backend/ChainLeash.SignalProvider`
