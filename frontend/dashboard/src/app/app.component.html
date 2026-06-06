@@ -15,6 +15,9 @@
   </div>
 </header>
 
+@if (config()?.readOnly) {
+  <div class="banner info">👁 Observer mode — this agent has no signing key, so it reads the live vault but never acts. Deploy your own vault (see the README) to drive the agent.</div>
+}
 @if (s?.paused) {
   <div class="banner paused">⏸ KILL-SWITCH ENGAGED — the owner has paused the agent. Every agent move is rejected on-chain until unpaused.</div>
 }

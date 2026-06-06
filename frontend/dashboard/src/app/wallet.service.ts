@@ -8,6 +8,7 @@ export interface AppConfig {
   csprClickAppId: string;
   walletCoSignEnabled: boolean;
   allowServerKeyCoSign: boolean;
+  readOnly: boolean;
 }
 
 const CSPRCLICK_CDN = 'https://cdn.cspr.click/ui/v2.0.0/csprclick-client-2.0.0.js';

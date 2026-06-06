@@ -13,17 +13,25 @@ namespace ChainLeash.Agent;
 public sealed class X402Client
 {
     private readonly IConfiguration _cfg;
-    private readonly KeyPair _agentKp;
-    private readonly PublicKey _providerPk;
+    private readonly KeyPair? _agentKp;
+    private readonly PublicKey? _providerPk;
     private readonly HttpClient _http = new();
 
     public X402Client(IConfiguration cfg)
     {
         _cfg = cfg;
-        _agentKp = KeyPair.FromPem(cfg["Casper:AgentSecretKeyPath"]!);
+        // Both loads are optional: with no agent key / provider pubkey the agent runs
+        // OBSERVER-ONLY (it can't pay-to-think), so the host still boots cleanly.
+        var agentPath = cfg["Casper:AgentSecretKeyPath"];
+        if (!string.IsNullOrWhiteSpace(agentPath) && File.Exists(agentPath))
+            _agentKp = KeyPair.FromPem(agentPath);
         var providerPath = cfg["X402:ProviderPubKeyPath"] ?? "../../spike/ChainLeash.Spike/secrets/human/public_key_hex";
-        _providerPk = PublicKey.FromHexString(File.ReadAllText(providerPath).Trim());
+        if (File.Exists(providerPath))
+            _providerPk = PublicKey.FromHexString(File.ReadAllText(providerPath).Trim());
     }
+
+    /// True when no agent key / provider pubkey is configured — pay-to-think is unavailable.
+    public bool Disabled => _agentKp is null || _providerPk is null;
 
     public sealed record Signal(double Rate, string Risk, string SettlementHash, ulong PaidMotes);
 
@@ -31,6 +39,9 @@ public sealed class X402Client
     /// real, relevant read). Pays over x402 and only returns once the payment has settled.
     public async Task<Signal> BuySignal(string? validatorHex = null)
     {
+        if (_agentKp is null || _providerPk is null)
+            throw new InvalidOperationException("x402 pay-to-think disabled — no agent key / provider pubkey (observer mode)");
+        var agentKp = _agentKp!; var providerPk = _providerPk!;
         var baseUrl = _cfg["X402:SignalUrl"] ?? "http://localhost:5080/rate";
         var url = string.IsNullOrEmpty(validatorHex) ? baseUrl : $"{baseUrl}?validator={validatorHex}";
 
@@ -46,13 +57,13 @@ public sealed class X402Client
 
         // Pay the fee over Casper (native transfer to the provider's account).
         var pay = new Transaction.NativeTransferBuilder()
-            .Target(_providerPk)
+            .Target(providerPk)
             .Amount(amount)
-            .From(_agentKp.PublicKey)
+            .From(agentKp.PublicKey)
             .ChainName(_cfg["Casper:ChainName"]!)
             .Payment(100_000_000UL, 1)
             .Build();
-        pay.Sign(_agentKp);
+        pay.Sign(agentKp);
 
         var client = Rpc();
         await client.PutTransaction(pay);

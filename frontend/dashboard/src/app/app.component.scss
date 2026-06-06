@@ -24,6 +24,7 @@
   margin: 14px 0; padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600;
   &.paused { background: rgba(231,76,60,.16); color: #ff6b5e; border: 1px solid rgba(231,76,60,.4); }
   &.error  { background: rgba(241,196,15,.14); color: #f1c40f; border: 1px solid rgba(241,196,15,.35); }
+  &.info   { background: rgba(56,189,248,.12); color: var(--accent); border: 1px solid rgba(56,189,248,.32); }
 }
 .policy { color: var(--muted); font-size: 12.5px; margin: 0 0 18px; b { color: var(--text); font-weight: 600; } }
 .err-line { color: #ff6b5e; font-size: 12px; margin: 8px 0 0; }
