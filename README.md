@@ -19,6 +19,8 @@ it can do is enforced by Casper itself — not by the server**:
   CSPR out of the vault. A fully compromised agent can mis-delegate within the
   leash; it can never steal;
 - over-cap "material" moves require an explicit **human co-sign** (propose → approve);
+- the owner can set a **per-validator cap** (no over-concentration → decentralization), an
+  **action cooldown** (anti-thrash), and a one-call **kill-switch** that freezes the agent;
 - the treasury account's **native weighted keys** put the agent key *below* the
   `key_management` threshold, so the agent can never expand its own authority or
   rotate keys. The leash can tighten itself; only a human loosens it.
@@ -58,16 +60,18 @@ validator data is public, so the moat is the *leash*, not the data.
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
-[`8f1d2c7d…879fac`](https://testnet.cspr.live/contract-package/8f1d2c7d7a6d26c58479fcc6be913a77223afdb2bd2dc5664ee58a59c2879fac)).
+[`1a34ca6c…87d1`](https://testnet.cspr.live/contract-package/1a34ca6c151d8747d88337740ca0f70b1b31cde097dbacebed4c671d8c9b87d1)).
 Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
 |------|-------------|
-| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`cf1d7922…`](https://testnet.cspr.live/transaction/cf1d792224182561baa9fe99546ceaa51d8e6d549ef88ff8996653d517a2f63b) |
-| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`9989c29f…`](https://testnet.cspr.live/transaction/9989c29f241ca1b023f99518141a8efd50deb98563ac69b475aac972c11f067b) |
-| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`cfe49e71…`](https://testnet.cspr.live/transaction/cfe49e71ad4ff4881a394a083a2b022a15dbe208aa213abada2d2d08ac192a38) |
-| Human owner **co-signs** → a material (over-cap) move executes | [`db5dcd2a…`](https://testnet.cspr.live/transaction/db5dcd2a0d73bf453ed824d1523a88ac6cf59688c1be05412f29ce891f8e1a5e) |
-| Agent **undelegates** 200 CSPR back to the vault | [`7e14d0bc…`](https://testnet.cspr.live/transaction/7e14d0bce1574617354432c5ca1697520ba93b7fae00c8a553b02c30d9161e21) |
+| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`b02bcc74…`](https://testnet.cspr.live/transaction/b02bcc74ce981b0aedc4e0e0fb879636b91ac84c7735a602ab5cb97f87e6b55f) |
+| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`54f60083…`](https://testnet.cspr.live/transaction/54f60083f5b0722f9810b83e090ad751edd145eb3002ec35eb5f2ea75ac3f185) |
+| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`1e98c04b…`](https://testnet.cspr.live/transaction/1e98c04b1cbec64452cdba9106034712b391968e7b2cf8ea49452f58d6f802e7) |
+| Over per-validator cap — **rejected on-chain** (`PerValidatorCapExceeded`, decentralization) | [`fa2e43ab…`](https://testnet.cspr.live/transaction/fa2e43abc1037b31367cfe09cc2be85072b621c38943d727ff8dc32223caa4a7) |
+| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`62d0bebb…`](https://testnet.cspr.live/transaction/62d0bebbf2cb8909642fb9b3bc836af83e432c839b75f18b57be46a984c49989) |
+| Human owner **co-signs** → a material (over-cap) move executes | [`0913698d…`](https://testnet.cspr.live/transaction/0913698d355607e29e9a2a4886b212d4caeac587fb6abeaef9805ad05f9765aa) |
+| Agent **undelegates** 200 CSPR back to the vault | [`7ddcc527…`](https://testnet.cspr.live/transaction/7ddcc5278e11a4304bc1617332a527cb482ae42a5b31970f9f09cf01c7cc2c66) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
 
 Earlier artifacts (autonomous policy-breach exit, non-allowlisted rejection, weighted-key
@@ -92,9 +96,10 @@ opaque discretion — so the policy is deterministic and every decision is on-ch
 
 ## Architecture
 
-- **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash
-  (cap, validator allowlist, propose→approve, posted CSPR bond + on-chain violation
-  log, owner-only withdraw).
+- **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash —
+  delegate/undelegate/redelegate under a per-action cap, validator allowlist,
+  per-validator cap, action cooldown, owner kill-switch, propose→approve material
+  co-sign, a posted CSPR bond + on-chain violation log, and owner-only withdraw.
 - **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop
   (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain
   client (`CasperVault`), and the x402 pay-to-think buyer + provider.
