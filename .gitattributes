@@ -1,0 +1,11 @@
+# Shell scripts MUST stay LF — CRLF breaks the shebang on Linux/macOS ("bad interpreter").
+*.sh text eol=lf
+deploy.sh text eol=lf
+# Normalize text by default; let git pick the working-copy ending per platform.
+* text=auto
+# Binaries — never normalize.
+*.wasm binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.pem binary
