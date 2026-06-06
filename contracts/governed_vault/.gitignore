@@ -4,5 +4,8 @@
 Cargo.lock
 .backend*
 .builder*
-/wasm
+/wasm/*
+# ...but ship the deployable wasm so testers can deploy without the Odra toolchain
+!/wasm/GovernedVault.wasm
+!/wasm/proxy_caller.wasm
 .env

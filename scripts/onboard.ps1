@@ -50,6 +50,7 @@ function Run-Spike([string[]]$cmdArgs) {
 
 Write-Host "==> Building spike harness..." -ForegroundColor Cyan
 Push-Location $spikeDir; try { dotnet build -clp:ErrorsOnly | Out-Null } finally { Pop-Location }
+if ($LASTEXITCODE -ne 0) { throw "spike build failed — fix the build before onboarding (later steps run with --no-build)." }
 
 # 1) Deploy a fresh GovernedVault.
 Write-Host "==> [1/6] Deploying GovernedVault..." -ForegroundColor Cyan
