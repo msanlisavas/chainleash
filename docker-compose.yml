@@ -30,7 +30,7 @@ services:
     environment:
       - ASPNETCORE_URLS=http://+:5179
       - Casper__CsprCloudAccessKey=${CSPR_CLOUD_KEY:-55f79117-fc4d-4d60-9956-65423f39a06a}
-      - Casper__GovernedVaultPackageHash=${VAULT_PKG:-hash-716d71bded4901c66169e7b4b207f043a75f6ffe1fc037ab9e25d89425b25aa0}
+      - Casper__GovernedVaultPackageHash=${VAULT_PKG:-hash-f5600a9fcca977de4d2ba259a02ecc9ec5c2256022080b7824cd97fcf5c96591}
       - Casper__OwnerPublicKeyHex=${OWNER_PUBKEY:-011A493f54caDeC630682aA2c64A40d0569b9c3A924876C010cFE27735162654B5}
       - Casper__AgentSecretKeyPath=/secrets/agent/secret_key.pem
       - Casper__HumanSecretKeyPath=/secrets/human/secret_key.pem

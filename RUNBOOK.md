@@ -153,7 +153,7 @@ CI (`.github/workflows/ci.yml`) runs both on every push/PR.
 ## Live deployment + on-chain artifacts
 
 Package
-[`716d71bd…25aa0`](https://testnet.cspr.live/contract-package/716d71bded4901c66169e7b4b207f043a75f6ffe1fc037ab9e25d89425b25aa0)
+[`f5600a9f…c96591`](https://testnet.cspr.live/contract-package/f5600a9fcca977de4d2ba259a02ecc9ec5c2256022080b7824cd97fcf5c96591)
 on testnet (upgradable). The full artifact list (with transaction hashes) is in
 [README.md](README.md#proven-on-casper-20-testnet).
 

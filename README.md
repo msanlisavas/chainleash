@@ -100,19 +100,19 @@ yield; the agent only switches validators when the gain outweighs the unbonding 
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
-[`716d71bd…25aa0`](https://testnet.cspr.live/contract-package/716d71bded4901c66169e7b4b207f043a75f6ffe1fc037ab9e25d89425b25aa0)).
+[`f5600a9f…c96591`](https://testnet.cspr.live/contract-package/f5600a9fcca977de4d2ba259a02ecc9ec5c2256022080b7824cd97fcf5c96591)).
 Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
 |------|-------------|
-| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`c783f8c1…`](https://testnet.cspr.live/transaction/c783f8c10bc7e578596241fe9a4db4b857d282ac47853cb70474725cf410f66a) |
-| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`2af8eb9a…`](https://testnet.cspr.live/transaction/2af8eb9afb1bbe199c8e4f8ee9f2a57b4d17f5dad86c092a41a26dba2ef6051a) |
-| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`c5d4a066…`](https://testnet.cspr.live/transaction/c5d4a06628fc0dafa9953e0ac195167992bac807ca254b429a3124a744697469) |
-| Over per-validator cap — **rejected on-chain** (`PerValidatorCapExceeded`, decentralization) | [`6640b9ae…`](https://testnet.cspr.live/transaction/6640b9aea8332d185a23333f471945df6354a91ebdc85262c19d17630af1fe7a) |
-| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`f8223959…`](https://testnet.cspr.live/transaction/f82239599e1248ce4cdfb29afb6a263e350ccfa8c145137700c7287cd466e908) |
-| Human owner **co-signs** → a material (over-cap) move executes | [`0f72d184…`](https://testnet.cspr.live/transaction/0f72d18452092c648c6fa62a9446bdbaf0b56cb030ef20372f2a9d73835e51d8) |
-| Agent **undelegates** 200 CSPR back to the vault | [`1711d4af…`](https://testnet.cspr.live/transaction/1711d4afde1b298b2d793b5ace55c0c2b9e847f7466e6318c47be69fe15801ff) |
-| Owner **slashes the agent's bond** on a violation (forfeited to owner — real economic teeth) | [`0b9fbf5f…`](https://testnet.cspr.live/transaction/0b9fbf5f80bac6c800a74791079f737ad341b2116df6b7d4666426523da92ca9) |
+| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`13846b6c…`](https://testnet.cspr.live/transaction/13846b6c373dd48ea497d0f663b178307f7f328a91a39f48ad6e45b6aa5d285a) |
+| Agent **redelegates** 400 CSPR validator→validator in one native tx | [`1b192030…`](https://testnet.cspr.live/transaction/1b192030453dcc179cc5bc2d1647a3ae43af75171947fdb1e325f07a39bdfa9c) |
+| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`48daeb16…`](https://testnet.cspr.live/transaction/48daeb16f9c086893e6614a828218ddb93022e033ec56f6e91c6859ec35e9bac) |
+| Delegate to a **non-allowlisted** validator — **rejected on-chain** (`ValidatorNotAllowed`) | [`e257c48e…`](https://testnet.cspr.live/transaction/e257c48e5cb598fe92df80383a5846eb76c06856b0ba6aed4e1519c4858cd7bf) |
+| Agent tries to **undelegate more than it directed** — **rejected on-chain** (`ExceedsCommitted`, anti-grief) | [`0448eedd…`](https://testnet.cspr.live/transaction/0448eeddc1b6e363bfd2febd1a81bec44d8d4b5f40042073e9463ab15cdee35b) |
+| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`4e7463e5…`](https://testnet.cspr.live/transaction/4e7463e52e34a5dfb25cdcafa23e81a761d5376e7844c9eb6464cf0b24d5e7b7) |
+| Human owner **co-signs** → a material (over-cap, 700 CSPR) move executes | [`286bed61…`](https://testnet.cspr.live/transaction/286bed617d866bef1cd58ee95eff9a1341003ac19a0ea32f7d49e362d6fa0a69) |
+| Owner **slashes the agent's bond** on a violation (forfeited to owner — real economic teeth) | [`de19786a…`](https://testnet.cspr.live/transaction/de19786adb70a49abddbff3f1c8814285c35837577757b0c701a7db03f1513c1) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
 
 ### Security-reviewed
