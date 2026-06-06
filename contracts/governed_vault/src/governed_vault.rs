@@ -6,7 +6,8 @@
 //!   * per-action value cap on how much the agent can (un)delegate at once,
 //!   * a validator ALLOWLIST (the agent can only stake to approved validators),
 //!   * a propose -> human-approve flow for over-cap "material" moves,
-//!   * a slashable CSPR bond,
+//!   * a posted CSPR bond (held in the vault; policy violations are recorded
+//!     on-chain as auditable events — Casper has no native slashing),
 //!   * and crucially: the AGENT HAS NO WITHDRAW PATH. It can rebalance stake
 //!     among approved validators within the cap, but can NEVER move CSPR out of
 //!     the vault. Only the owner (human/exchange) can withdraw. So a fully
@@ -14,7 +15,7 @@
 //!
 //! Combined with the treasury account's native weighted keys (agent key below
 //! the key_management threshold), the agent also cannot raise its own authority
-//! or seize the bond. Built for real Casper staking — Casper's actual on-chain
+//! or rotate keys. Built for real Casper staking — Casper's actual on-chain
 //! economic primitive — not a fictional DeFi venue.
 
 use odra::casper_types::{PublicKey, U512};
@@ -135,7 +136,7 @@ impl GovernedVault {
         self.env().emit_event(Funded { from: self.env().caller(), amount });
     }
 
-    /// Post the agent's slashable bond.
+    /// Post the agent's CSPR bond (held in the vault; violations are recorded on-chain).
     #[odra(payable)]
     pub fn deposit_bond(&mut self) {
         let amount = self.env().attached_value();

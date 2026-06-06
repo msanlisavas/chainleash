@@ -20,8 +20,8 @@ it can do is enforced by Casper itself — not by the server**:
   leash; it can never steal;
 - over-cap "material" moves require an explicit **human co-sign** (propose → approve);
 - the treasury account's **native weighted keys** put the agent key *below* the
-  `key_management` threshold, so the agent can never expand its own authority,
-  rotate keys, or seize the bond. The leash can tighten itself; only a human loosens it.
+  `key_management` threshold, so the agent can never expand its own authority or
+  rotate keys. The leash can tighten itself; only a human loosens it.
 
 This maps directly to the Casper Manifest's thesis: **the trust layer for the agent economy.**
 
@@ -42,10 +42,18 @@ As Casper ships more on-chain venues, the same leash extends to them.
 
 Incumbents (Coinbase Agentic Wallets, AWS Bedrock AgentCore) enforce agent spend
 limits **off-chain inside an enclave** — the security of the money equals the security
-of the server. CHAINLEASH makes the limit a **protocol + contract + economic-bond**
-guarantee, and pairs it with an agent that **pays to think**: before acting it buys a
+of the server. CHAINLEASH makes the limit a **protocol + contract** guarantee
+(cap + allowlist + owner-only withdraw, all chain-enforced), and pairs it with an
+agent that **pays to think**: before acting it buys a
 premium risk read over Casper-native **x402** (a real CSPR settlement) and, when the
 policy is satisfied and nothing is off-policy, it **chooses not to act at all**.
+
+## Business model
+
+Primary: **B2B SaaS / licensing** to exchanges, custodians, and institutional treasuries
+that stake CSPR for users and need auditable, bonded, kill-switchable automation. Later:
+**basis points on governed (staked) AUM**. Not a data marketplace and not trading fees —
+validator data is public, so the moat is the *leash*, not the data.
 
 ## Proven on Casper 2.0 testnet
 
@@ -59,7 +67,7 @@ artifacts (all on [testnet.cspr.live](https://testnet.cspr.live)):
 | Delegate to a **non-allowlisted** validator — **rejected on-chain** (`ValidatorNotAllowed`) | `51f23498763ada110cb45fa353e9282109eaba8cac655f3798b51d3cedaf0d46` |
 | Agent proposes a material (over-cap) move | `c3070b9de380b36bacd4e78a3698b98a240cafa640aab20db2961dfe657f44b4` |
 | Human owner **co-signs** → the material move executes | `1068cbf13c4710e5c8839f9034880235b4ec0d0488e1d458b7fc265c606134f1` |
-| Agent pays for the premium risk read over **x402** (real CSPR transfer) | `cd85af4c…` |
+| Agent pays for the premium risk read over **x402** (real CSPR transfer) | `cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943` |
 
 ## How the agent works
 
@@ -79,12 +87,15 @@ opaque discretion — so the policy is deterministic and every decision is on-ch
 ## Architecture
 
 - **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash
-  (cap, validator allowlist, propose→approve, slashable bond, owner-only withdraw).
+  (cap, validator allowlist, propose→approve, posted CSPR bond + on-chain violation
+  log, owner-only withdraw).
 - **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop
   (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain
   client (`CasperVault`), and the x402 pay-to-think buyer + provider.
 - **Frontend** (`frontend/`) — Angular dashboard: live audit feed, validator-policy
-  view, x402 spend, and a CSPR.click human co-sign for material proposals.
+  view, x402 spend, and a human co-sign action for material proposals (today the owner
+  key signs `approve_material` server-side; in-browser CSPR.click / Casper Wallet
+  signing is the planned hardening).
 
 ## Status
 
