@@ -26,11 +26,18 @@ public sealed record ProposalView(uint Id, string Validator, decimal AmountCspr,
 public sealed class FeedState
 {
     public string PackageHash { get; set; } = "";
-    public decimal CapCspr { get; set; }
+    public decimal CapCspr { get; set; }            // value_cap — read from chain
     public int MaxCommissionPercent { get; set; }
     public decimal X402SpentCspr { get; set; }
     public int Actions { get; set; }
     public int Buys { get; set; }
+    // --- full leash state, all read from chain (no config) ---
+    public bool Paused { get; set; }                // owner kill-switch
+    public decimal BondCspr { get; set; }           // posted slashable bond
+    public decimal FreeBalanceCspr { get; set; }    // withdrawable (liquid − bond)
+    public decimal TotalBalanceCspr { get; set; }   // liquid vault purse
+    public decimal MaxPerValidatorCspr { get; set; }// per-validator ceiling (0 = unlimited)
+    public int Violations { get; set; }
     public List<ValidatorView> Validators { get; set; } = new();
     public List<ProposalView> Proposals { get; set; } = new();
 }

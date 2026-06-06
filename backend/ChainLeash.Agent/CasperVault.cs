@@ -62,6 +62,37 @@ public sealed class CasperVault
             new NamedArg("undelegate", CLValue.Bool(undelegate)),
         });
 
+    /// Post the agent's slashable bond into the vault (payable, via Odra's proxy_caller
+    /// session — same mechanism as treasury deposits). Skin in the game, on-chain.
+    public async Task<TxResult> PostBond(ulong amountMotes)
+    {
+        var proxyPath = _cfg["Casper:ProxyCallerWasmPath"] ?? "../../contracts/governed_vault/wasm/proxy_caller.wasm";
+        if (!File.Exists(proxyPath)) return new TxResult("", false, $"proxy wasm not found: {proxyPath}");
+        var proxy = File.ReadAllBytes(proxyPath);
+        var innerArgs = CLValue.List(new[] { CLValue.U8(0), CLValue.U8(0), CLValue.U8(0), CLValue.U8(0) });
+        var rargs = new List<NamedArg>
+        {
+            new NamedArg("package_hash", CLValue.ByteArray(Convert.FromHexString(_pkg))),
+            new NamedArg("entry_point", CLValue.String("deposit_bond")),
+            new NamedArg("args", innerArgs),
+            new NamedArg("attached_value", CLValue.U512(amountMotes)),
+            new NamedArg("amount", CLValue.U512(amountMotes)),
+        };
+        var tx = new Transaction.SessionBuilder()
+            .From(_agentKp.PublicKey).Wasm(proxy).RuntimeArgs(rargs)
+            .ChainName(_cfg["Casper:ChainName"]!).Payment(20_000_000_000UL, 1).Build();
+        tx.Sign(_agentKp);
+        var client = Rpc();
+        await client.PutTransaction(tx);
+        for (var i = 0; i < 24; i++)
+        {
+            await Task.Delay(5000);
+            var er = (await client.GetTransaction(tx.Hash, CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+            if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
+        }
+        return new TxResult(tx.Hash, false, "timeout");
+    }
+
     /// Overseer tightens (only lowers) the cap — emits CapTightened.
     public Task<TxResult> TightenCap(ulong newCapMotes) =>
         Call("tighten_cap", new List<NamedArg> { new NamedArg("new_cap", CLValue.U512(newCapMotes)) });
