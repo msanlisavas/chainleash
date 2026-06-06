@@ -21,6 +21,34 @@ app.UseCors();
 app.UseDefaultFiles();
 app.UseStaticFiles(); // serves the built Angular dashboard from wwwroot in production
 
+// Liveness + chain reachability + gas monitoring (for uptime checks / ops dashboards).
+app.MapGet("/health", async (ChainReader chain, CasperVault vault, AuditFeed feed, IConfiguration cfg) =>
+{
+    var warn = cfg.GetValue("Agent:LowGasWarnCspr", 50m);
+    decimal? vaultBal = null, gas = null;
+    var chainOk = false; string? error = null;
+    try
+    {
+        vaultBal = await chain.TotalBalanceCspr();           // proves chain reachable + vault resolved
+        gas = await chain.AccountBalanceCspr(vault.AgentKey.ToAccountHex());
+        chainOk = true;
+    }
+    catch (Exception ex) { error = ex.Message; }
+    var lowGas = gas is < 0 ? false : gas is not null && gas < warn;
+    var ok = chainOk && !feed.State.Paused && !lowGas;
+    return Results.Json(new
+    {
+        status = ok ? "ok" : "degraded",
+        chainReachable = chainOk,
+        vaultResolved = vaultBal is not null,
+        paused = feed.State.Paused,
+        agentGasCspr = gas,
+        lowGas,
+        vaultBalanceCspr = vaultBal,
+        error,
+    }, statusCode: chainOk ? 200 : 503);
+});
+
 // Snapshot of the live leash + agent state plus recent audit history (for first paint).
 app.MapGet("/api/state", (AuditFeed feed) => Results.Json(new { state = feed.State, events = feed.Recent() }));
 

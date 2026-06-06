@@ -134,4 +134,12 @@ public sealed class ChainReader
 
     /// Free, deployable CSPR = liquid balance minus the reserved bond.
     public async Task<decimal> FreeBalanceCspr() => await TotalBalanceCspr() - await BondCspr();
+
+    /// Liquid CSPR in an account's main purse (e.g. the agent's gas wallet) — for ops/health.
+    public async Task<decimal> AccountBalanceCspr(string publicKeyHex)
+    {
+        var bal = (await Rpc("query_balance", new { purse_identifier = new { main_purse_under_public_key = publicKeyHex } }))
+            .GetProperty("balance").GetString()!;
+        return decimal.Parse(bal, System.Globalization.CultureInfo.InvariantCulture) / 1_000_000_000m;
+    }
 }
