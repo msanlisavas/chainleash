@@ -35,13 +35,15 @@ app.MapGet("/rate", (HttpContext ctx) =>
     }
 
     // Mock-accept the on-chain payment proof (a real facilitator would verify the
-    // transfer settled `payTo` for >= maxAmountRequired). Serve the premium signal.
-    var phase = DateTime.UtcNow.Ticks / 1.0e11;
-    var rate = Math.Round(4.6 + Math.Sin(phase) * 0.7 + (rng.NextDouble() - 0.5) * 0.3, 2);
+    // transfer settled `payTo` for >= maxAmountRequired). Serve the premium signal:
+    // a forward-looking validator-risk read. Mostly "low" (the agent proceeds with a
+    // routine delegation); occasionally "elevated" (the agent escalates to human
+    // co-sign). A real provider would derive this from validator performance telemetry.
+    var rate = Math.Round(4.4 + (rng.NextDouble() - 0.5) * 1.2, 2);
     return Results.Json(new
     {
         rate,
-        risk = rate > 5.0 ? "elevated" : "low",
+        risk = rng.NextDouble() < 0.25 ? "elevated" : "low",
         paidWith = proof
     });
 });
