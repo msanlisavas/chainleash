@@ -1,0 +1,47 @@
+# CHAINLEASH — run the full stack (x402 signal provider + agent host serving the dashboard).
+#
+#   cp .env.example .env   # set CSPR_CLOUD_KEY (and optionally VAULT_PKG / OWNER_PUBKEY)
+#   docker compose up --build
+#
+# Then: dashboard + API at http://localhost:5179, health at http://localhost:5179/health,
+# signal provider at http://localhost:5080. Secrets are MOUNTED read-only, never baked in.
+services:
+  signal-provider:
+    build:
+      context: .
+      dockerfile: backend/ChainLeash.SignalProvider/Dockerfile
+    ports:
+      - "5080:5080"
+    environment:
+      - ASPNETCORE_URLS=http://+:5080
+      - X402__CsprCloudAccessKey=${CSPR_CLOUD_KEY:-55f79117-fc4d-4d60-9956-65423f39a06a}
+      - X402__PayToAccountHash=${X402_PAY_TO:-5bc1cf012c678676ff14c3cd3d2d72ac19d17819d448de4795f7bf1618bfd232}
+      - X402__PriceMotes=${X402_PRICE_MOTES:-2500000000}
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: backend/ChainLeash.Agent/Dockerfile
+    depends_on:
+      - signal-provider
+    ports:
+      - "5179:5179"
+    environment:
+      - ASPNETCORE_URLS=http://+:5179
+      - Casper__CsprCloudAccessKey=${CSPR_CLOUD_KEY:-55f79117-fc4d-4d60-9956-65423f39a06a}
+      - Casper__GovernedVaultPackageHash=${VAULT_PKG:-hash-716d71bded4901c66169e7b4b207f043a75f6ffe1fc037ab9e25d89425b25aa0}
+      - Casper__OwnerPublicKeyHex=${OWNER_PUBKEY:-011A493f54caDeC630682aA2c64A40d0569b9c3A924876C010cFE27735162654B5}
+      - Casper__AgentSecretKeyPath=/secrets/agent/secret_key.pem
+      - Casper__HumanSecretKeyPath=/secrets/human/secret_key.pem
+      - Agent__DataPath=/data/feed.json
+      - X402__SignalUrl=http://signal-provider:5080/rate
+    volumes:
+      # the agent signs with its OWN key; mount it (and the dev-only human key) read-only
+      - ./spike/ChainLeash.Spike/secrets:/secrets:ro
+      # persist the audit feed across restarts
+      - chainleash-data:/data
+    restart: unless-stopped
+
+volumes:
+  chainleash-data:

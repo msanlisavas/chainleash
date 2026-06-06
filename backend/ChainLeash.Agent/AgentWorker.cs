@@ -27,6 +27,7 @@ public sealed class AgentWorker : BackgroundService
     private readonly AuditFeed _feed;
 
     private int _tick, _actions, _buys;
+    private bool _gasWarned;
 
     public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators,
         ChainReader chain, IConfiguration cfg, IHostApplicationLifetime life, AuditFeed feed)
@@ -95,6 +96,7 @@ public sealed class AgentWorker : BackgroundService
         foreach (var a in assessments) committed[a.PublicKey] = await _chain.CommittedCspr(a.PublicKey);
 
         await RefreshState(assessments, committed, cap, free, paused);
+        await MaybeWarnLowGas();
 
         if (paused)
         {
@@ -224,12 +226,29 @@ public sealed class AgentWorker : BackgroundService
             s.TotalBalanceCspr = await _chain.TotalBalanceCspr();
             s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr();
             s.Violations = (int)await _chain.Violations();
+            s.AgentGasCspr = await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
         }
         catch { /* keep last-known on a transient read failure */ }
         s.Validators = assessments
             .Select(a => new ValidatorView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant, committed.GetValueOrDefault(a.PublicKey), a.Note))
             .ToList();
         await _feed.PushState();
+    }
+
+    /// Warn once when the agent's gas wallet dips below the threshold (edge-triggered).
+    private async Task MaybeWarnLowGas()
+    {
+        var warn = _cfg.GetValue("Agent:LowGasWarnCspr", 50m);
+        var gas = _feed.State.AgentGasCspr;
+        if (gas > 0 && gas < warn)
+        {
+            if (!_gasWarned)
+            {
+                await Emit("HOLD", $"⛽ Agent gas low: {gas:N0} CSPR (< {warn:N0}). Top up the agent account so it can keep signing transactions.");
+                _gasWarned = true;
+            }
+        }
+        else if (gas >= warn) _gasWarned = false;
     }
 
     private Task Emit(string kind, string message, string? validator = null, decimal? amountCspr = null, string? txHash = null, bool? success = null) =>

@@ -19,6 +19,10 @@ frontend/**/.angular/
 # Dashboard build output (produced by `ng build` into the agent host)
 backend/ChainLeash.Agent/wwwroot/
 
+# Agent runtime persistence (audit-feed snapshot — survives restarts, not source)
+**/data/feed.json
+backend/ChainLeash.Agent/data/
+
 # Playwright MCP artifacts
 .playwright-mcp/
 

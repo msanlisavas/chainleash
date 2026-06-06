@@ -62,11 +62,17 @@ validator data is public, so the moat is the *leash*, not the data.
 ## Works for any CSPR holder — multisig-ready
 
 The same engine serves a 10M-CSPR individual and a 500M-CSPR institution; only the
-cap, allowlist, bond, and policy params differ. Each holder runs **their own vault**:
-deploy a `GovernedVault`, set themselves (or their multisig) as owner, choose the
-allowlist + cap + per-validator cap + cooldown, fund it, and point the agent at it
-(the agent is config-driven, so one agent can serve many vaults). Steps are in the
-[RUNBOOK](RUNBOOK.md).
+cap, allowlist, bond, and policy params differ. Each holder runs **their own vault**,
+and standing one up is **one command**:
+
+```powershell
+./scripts/onboard.ps1 -CapCspr 600 -Validators @('0106618e…','017d96b9…') -DepositCspr 1000 -BondCspr 300
+```
+
+That deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms the
+validator allowlist on-chain, optionally funds it and posts the bond, and **points the
+agent at the new vault** by writing its config — so one config-driven agent can serve
+many vaults. Manual steps are in the [RUNBOOK](RUNBOOK.md).
 
 **Multisig is native.** The owner can be any Casper account, including a **weighted-key
 (M-of-N multisig) account** that big wallets already support — so a material move can
@@ -124,6 +130,22 @@ Each tick the agent:
 
 Institutions want the agent to *execute a published rule auditably*, not to exercise
 opaque discretion — so the policy is deterministic and every decision is on-chain.
+
+## Run it
+
+The whole stack runs with Docker:
+
+```bash
+cp .env.example .env        # set CSPR_CLOUD_KEY (defaults point at the live demo vault)
+docker compose up --build
+```
+
+Dashboard + API at `http://localhost:5179`, the x402 signal provider at `:5080`, and a
+`GET /health` endpoint that reports chain reachability, the agent's gas balance, and a
+**low-gas warning**. The agent's audit feed is **persisted**, so it survives restarts.
+Secrets are mounted read-only — never baked into an image. (For local dev without Docker:
+run `backend/ChainLeash.SignalProvider` then `backend/ChainLeash.Agent` with
+`dotnet run`; the agent serves the prebuilt dashboard from `wwwroot`.)
 
 ## Architecture
 

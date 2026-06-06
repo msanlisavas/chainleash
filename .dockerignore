@@ -1,0 +1,16 @@
+# Keep the Docker build context small + never ship secrets or local artifacts.
+.git
+**/node_modules
+**/bin
+**/obj
+**/target
+**/.angular
+backend/ChainLeash.Agent/wwwroot
+**/data
+**/secrets
+*.pem
+*.wasm
+docs/superpowers
+.claude
+CLAUDE.md
+*.stackdump

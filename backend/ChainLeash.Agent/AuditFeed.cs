@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ChainLeash.Agent;
@@ -38,6 +39,7 @@ public sealed class FeedState
     public decimal TotalBalanceCspr { get; set; }   // liquid vault purse
     public decimal MaxPerValidatorCspr { get; set; }// per-validator ceiling (0 = unlimited)
     public int Violations { get; set; }
+    public decimal AgentGasCspr { get; set; }       // agent account balance (pays tx gas) — ops/health
     public List<ValidatorView> Validators { get; set; } = new();
     public List<ProposalView> Proposals { get; set; } = new();
 }
@@ -45,16 +47,28 @@ public sealed class FeedState
 /// SignalR hub the dashboard subscribes to: receives "audit" (per event) and "state".
 public sealed class AuditHub : Hub { }
 
-/// Singleton sink the agent writes to; keeps recent history and broadcasts over SignalR.
+/// On-disk snapshot so the audit trail + cumulative x402 spend survive a restart.
+/// (Leash state is re-read from chain each tick, so it isn't persisted.)
+file sealed record FeedSnapshot(List<AuditEvent> Events, decimal X402SpentCspr);
+
+/// Singleton sink the agent writes to; keeps recent history, persists it, and broadcasts
+/// over SignalR. The audit log is restored on startup so the dashboard isn't blank.
 public sealed class AuditFeed
 {
     private readonly IHubContext<AuditHub> _hub;
     private readonly object _lock = new();
     private readonly LinkedList<AuditEvent> _events = new();
+    private readonly string? _path;
 
     public FeedState State { get; } = new();
 
-    public AuditFeed(IHubContext<AuditHub> hub) => _hub = hub;
+    public AuditFeed(IHubContext<AuditHub> hub, IConfiguration cfg)
+    {
+        _hub = hub;
+        var configured = cfg["Agent:DataPath"];
+        _path = string.IsNullOrWhiteSpace(configured) ? Path.Combine("data", "feed.json") : configured;
+        Load();
+    }
 
     public IReadOnlyList<AuditEvent> Recent()
     {
@@ -68,8 +82,46 @@ public sealed class AuditFeed
             _events.AddFirst(e);
             while (_events.Count > 200) _events.RemoveLast();
         }
+        Save();
         await _hub.Clients.All.SendAsync("audit", e);
     }
 
-    public Task PushState() => _hub.Clients.All.SendAsync("state", State);
+    public Task PushState()
+    {
+        Save(); // cumulative x402 spend lives on State and changes between events
+        return _hub.Clients.All.SendAsync("state", State);
+    }
+
+    private void Load()
+    {
+        try
+        {
+            if (_path is null || !File.Exists(_path)) return;
+            var snap = JsonSerializer.Deserialize<FeedSnapshot>(File.ReadAllText(_path));
+            if (snap is null) return;
+            lock (_lock)
+            {
+                _events.Clear();
+                // file stores newest-first; AddLast preserves that order
+                foreach (var e in snap.Events.Take(200)) _events.AddLast(e);
+            }
+            State.X402SpentCspr = snap.X402SpentCspr;
+        }
+        catch { /* corrupt/old snapshot — start fresh */ }
+    }
+
+    private void Save()
+    {
+        if (_path is null) return;
+        try
+        {
+            List<AuditEvent> snapshot;
+            lock (_lock) snapshot = _events.ToList();
+            var dir = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var json = JsonSerializer.Serialize(new FeedSnapshot(snapshot, State.X402SpentCspr));
+            File.WriteAllText(_path, json);
+        }
+        catch { /* best-effort persistence — never break the live feed on an I/O hiccup */ }
+    }
 }
