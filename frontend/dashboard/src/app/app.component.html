@@ -15,12 +15,27 @@
   </div>
 </header>
 
+@if (s?.paused) {
+  <div class="banner paused">⏸ KILL-SWITCH ENGAGED — the owner has paused the agent. Every agent move is rejected on-chain until unpaused.</div>
+}
+@if (loadError() && !s) {
+  <div class="banner error">Can't reach the agent API. Is the agent running? Retrying on the next event…</div>
+}
+
 <section class="stats">
   <div class="card"><span class="label">Per-action cap</span><span class="value">{{ s?.capCspr ?? '—' }} <em>CSPR</em></span></div>
-  <div class="card"><span class="label">Policy</span><span class="value">commission ≤ {{ s?.maxCommissionPercent ?? '—' }}<em>%</em></span></div>
+  <div class="card"><span class="label">Free (deployable)</span><span class="value">{{ s?.freeBalanceCspr ?? '—' }} <em>CSPR</em></span></div>
+  <div class="card"><span class="label">Slashable bond</span><span class="value">{{ s?.bondCspr ?? '—' }} <em>CSPR</em></span></div>
   <div class="card"><span class="label">x402 paid-to-think</span><span class="value">{{ (s?.x402SpentCspr ?? 0).toFixed(2) }} <em>CSPR</em></span></div>
   <div class="card"><span class="label">On-chain actions</span><span class="value">{{ s?.actions ?? 0 }}</span></div>
+  <div class="card"><span class="label">Violations</span><span class="value">{{ s?.violations ?? 0 }}</span></div>
 </section>
+
+<p class="policy">
+  Policy: commission ≤ <b>{{ s?.maxCommissionPercent ?? '—' }}%</b> ·
+  per-validator cap <b>{{ s?.maxPerValidatorCspr ? (s?.maxPerValidatorCspr + ' CSPR') : 'unlimited' }}</b> ·
+  vault liquid balance <b>{{ s?.totalBalanceCspr ?? '—' }} CSPR</b> — all read live from chain.
+</p>
 
 <main class="grid">
   <section class="feed panel">
@@ -51,7 +66,7 @@
           <div class="meta">
             <span>commission <b>{{ v.feePercent }}%</b></span>
             <span>{{ v.active ? 'active' : 'inactive' }}</span>
-            @if (v.delegatedCspr > 0) { <span>delegated <b>{{ v.delegatedCspr }}</b> CSPR</span> }
+            @if (v.delegatedCspr > 0) { <span>committed <b>{{ v.delegatedCspr }}</b> CSPR</span> }
           </div>
         </div>
       } @empty {
@@ -75,11 +90,13 @@
       } @empty {
         <p class="empty">No moves awaiting co-sign — the agent is operating within its leash.</p>
       }
+      @if (approveError()) { <p class="err-line">Co-sign failed: {{ approveError() }}</p> }
     </section>
   </aside>
 </main>
 
 <footer>
-  The agent can rebalance stake within the cap &amp; allowlist, but <b>cannot withdraw</b> and
-  <b>cannot raise its own authority</b>. The leash is enforced by the Casper contract, not this server.
+  The agent can rebalance stake within the cap &amp; allowlist, but <b>cannot withdraw</b>,
+  <b>cannot raise its own authority</b>, and forfeits its <b>bond</b> on a violation. The
+  leash is enforced by the Casper contract, not this server — every value above is read live from chain.
 </footer>

@@ -134,10 +134,14 @@ opaque discretion — so the policy is deterministic and every decision is on-ch
 - **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop
   (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain
   client (`CasperVault`), and the x402 pay-to-think buyer + provider.
-- **Frontend** (`frontend/`) — Angular dashboard: live audit feed, validator-policy
-  view, x402 spend, and a human co-sign action for material proposals (today the owner
+- **Frontend** (`frontend/`) — Angular dashboard: the **full leash state read live from
+  chain** (per-action cap, free/total balance, slashable bond, per-validator cap,
+  violations, and a prominent kill-switch banner when the owner pauses the agent), a
+  live audit feed, the validator-policy view with per-validator committed stake, x402
+  spend, and a human co-sign action for material proposals. It re-syncs the snapshot on
+  reconnect and surfaces a clear banner if the agent API is unreachable. (Today the owner
   key signs `approve_material` server-side; in-browser CSPR.click / Casper Wallet
-  signing is the planned hardening).
+  signing is the planned hardening.)
 
 ## Status
 

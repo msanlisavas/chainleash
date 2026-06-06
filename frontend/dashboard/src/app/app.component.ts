@@ -15,6 +15,9 @@ interface ProposalView {
 interface FeedState {
   packageHash: string; capCspr: number; maxCommissionPercent: number;
   x402SpentCspr: number; actions: number; buys: number;
+  // full leash state, all read from chain
+  paused: boolean; bondCspr: number; freeBalanceCspr: number; totalBalanceCspr: number;
+  maxPerValidatorCspr: number; violations: number;
   validators: ValidatorView[]; proposals: ProposalView[];
 }
 
@@ -32,13 +35,14 @@ export class AppComponent implements OnInit {
   events = signal<AuditEvent[]>([]);
   state = signal<FeedState | null>(null);
   connected = signal(false);
+  loadError = signal(false);
   approving = signal<number | null>(null);
+  approveError = signal<string | null>(null);
 
   constructor(private http: HttpClient) {}
 
   ngOnInit(): void {
-    this.http.get<{ state: FeedState; events: AuditEvent[] }>(`${this.api}/api/state`)
-      .subscribe(r => { this.state.set(r.state); this.events.set(r.events); });
+    this.loadState();
 
     const conn = new signalR.HubConnectionBuilder()
       .withUrl(`${this.api}/hub/audit`)
@@ -47,16 +51,25 @@ export class AppComponent implements OnInit {
 
     conn.on('audit', (e: AuditEvent) => this.events.update(list => [e, ...list].slice(0, 200)));
     conn.on('state', (s: FeedState) => this.state.set(s));
-    conn.onreconnected(() => this.connected.set(true));
+    conn.onreconnected(() => { this.connected.set(true); this.loadState(); }); // re-sync after an outage
     conn.onclose(() => this.connected.set(false));
     conn.start().then(() => this.connected.set(true)).catch(() => this.connected.set(false));
   }
 
+  /** (Re)fetch the snapshot — used on load and on SignalR reconnect. */
+  private loadState(): void {
+    this.http.get<{ state: FeedState; events: AuditEvent[] }>(`${this.api}/api/state`).subscribe({
+      next: r => { this.state.set(r.state); if (r.events?.length) this.events.set(r.events); this.loadError.set(false); },
+      error: () => this.loadError.set(true)
+    });
+  }
+
   approve(p: ProposalView): void {
     this.approving.set(p.id);
-    this.http.post(`${this.api}/api/approve/${p.id}`, {}).subscribe({
-      next: () => this.approving.set(null),
-      error: () => this.approving.set(null)
+    this.approveError.set(null);
+    this.http.post<{ success: boolean; error?: string }>(`${this.api}/api/approve/${p.id}`, {}).subscribe({
+      next: r => { this.approving.set(null); if (!r.success) this.approveError.set(r.error ?? 'co-sign failed'); },
+      error: () => { this.approving.set(null); this.approveError.set('co-sign request failed'); }
     });
   }
 
