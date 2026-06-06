@@ -57,6 +57,24 @@ that stake CSPR for users and need auditable, bonded, kill-switchable automation
 **basis points on governed (staked) AUM**. Not a data marketplace and not trading fees —
 validator data is public, so the moat is the *leash*, not the data.
 
+## Works for any CSPR holder — multisig-ready
+
+The same engine serves a 10M-CSPR individual and a 500M-CSPR institution; only the
+cap, allowlist, bond, and policy params differ. Each holder runs **their own vault**:
+deploy a `GovernedVault`, set themselves (or their multisig) as owner, choose the
+allowlist + cap + per-validator cap + cooldown, fund it, and point the agent at it
+(the agent is config-driven, so one agent can serve many vaults). Steps are in the
+[RUNBOOK](RUNBOOK.md).
+
+**Multisig is native.** The owner can be any Casper account, including a **weighted-key
+(M-of-N multisig) account** that big wallets already support — so a material move can
+require, say, **2-of-3 human signatures** (the contract's owner-gated `approve_material`
+inherits the owner account's signature threshold; no extra contract logic). CHAINLEASH
+already uses this primitive on the *agent* side — the agent key sits below the account's
+`key_management` threshold, proven on-chain — so the same weighted-key mechanism secures
+the owner side too. And rewards **auto-compound** natively, so simply holding never loses
+yield; the agent only switches validators when the gain outweighs the unbonding cost.
+
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
