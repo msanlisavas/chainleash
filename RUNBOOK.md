@@ -88,5 +88,5 @@ is in [README.md](README.md#proven-on-casper-20-testnet).
 The agent can rebalance stake **within the cap and allowlist** and propose larger
 moves — but it has **no withdraw path** and sits **below the account's
 `key_management` threshold**, so it can never move CSPR out of the vault, raise its own
-authority, or seize the bond. Only the human owner can. The chain enforces this, not
+authority, or rotate keys. Only the human owner can. The chain enforces this, not
 the server.
