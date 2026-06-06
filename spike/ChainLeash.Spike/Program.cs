@@ -42,6 +42,9 @@ switch (command)
     case "balance": await Balance(); break;
     case "account-hash": AccountHashes(); break;
     case "vault-tighten": await VaultTighten(); break;
+    case "vault-deploy": await VaultDeploy(); break;
+    case "vault-find": await VaultFind(); break;
+    case "vault-init": await VaultInit(); break;
     case "setup-keys": await SetupKeys(); break;
 
     case "attempt-overreach": await AttemptOverreach(); break;
@@ -297,18 +300,136 @@ void AccountHashes()
     }
 }
 
+// Initialize the deployed GovernedVault (agent/owner/value_cap) by package hash.
+// usage: vault-init <package-hash>
+async Task VaultInit()
+{
+    var cfg = Config();
+    if (args.Length < 2) { Console.WriteLine("usage: vault-init <package-hash>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+    var humanPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim());
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("initialize")
+        .RuntimeArgs(new List<NamedArg>
+        {
+            new NamedArg("agent", CLValue.KeyFromPublicKey(agentKp.PublicKey)),
+            new NamedArg("owner", CLValue.KeyFromPublicKey(humanPk)),
+            new NamedArg("value_cap", CLValue.U512(2_000_000_000UL)),
+        })
+        .From(agentKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(10_000_000_000UL, 1)
+        .Build();
+    tx.Sign(agentKp);
+
+    var client = Rpc(cfg);
+    Console.WriteLine("Initializing GovernedVault (agent, owner, value_cap=2 CSPR)...");
+    try { await client.PutTransaction(tx); Console.WriteLine($"tx: {tx.Hash}\nhttps://testnet.cspr.live/transaction/{tx.Hash}"); }
+    catch (Exception ex) { Console.WriteLine($"REJECTED: {ex.Message}"); return; }
+
+    for (int i = 1; i <= 24; i++)
+    {
+        await Task.Delay(5000);
+        try
+        {
+            var er = (await client.GetTransaction(tx.Hash, System.Threading.CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+            if (er is not null)
+            {
+                Console.WriteLine($"EXECUTED IsSuccess={er.IsSuccess} cost={er.Cost}");
+                if (!er.IsSuccess) Console.WriteLine($"  error: {er.ErrorMessage}");
+                else Console.WriteLine("  OK GovernedVault initialized.");
+                return;
+            }
+            Console.WriteLine($"  [{i * 5,3}s] pending...");
+        }
+        catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
+    }
+}
+
+// Print the agent entity's named keys (to find the GovernedVault package hash).
+async Task VaultFind()
+{
+    var cfg = Config();
+    var agentPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim());
+    var res = (await Rpc(cfg).GetAccountInfo(agentPk, (string?)null)).Parse();
+    foreach (var nk in res.Account.NamedKeys)
+        Console.WriteLine($"{nk.Name} = {nk.Key}");
+}
+
+// Install the Odra GovernedVault wasm via a TransactionV1 session (the proven pipeline).
+// Replicates Odra's installer args: odra_cfg_* + the init constructor args.
+async Task VaultDeploy()
+{
+    var cfg = Config();
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+    var wasmPath = cfg["GovernedVaultWasmPath"] ?? "../../contracts/governed_vault/wasm/GovernedVault.wasm";
+    if (!File.Exists(wasmPath)) { Console.WriteLine($"wasm not found: {wasmPath} — build it first."); return; }
+    var wasm = File.ReadAllBytes(wasmPath);
+
+    // No constructor -> install needs only the Odra cfg args; we initialize() separately.
+    var rargs = new List<NamedArg>
+    {
+        new NamedArg("odra_cfg_package_hash_key_name", "governed_vault_package_hash"),
+        new NamedArg("odra_cfg_allow_key_override", true),
+        new NamedArg("odra_cfg_is_upgradable", true),
+        new NamedArg("odra_cfg_is_upgrade", false),
+    };
+
+    var tx = new Transaction.SessionBuilder()
+        .From(agentKp.PublicKey)
+        .Wasm(wasm)
+        .InstallOrUpgrade() // Casper 2.0: mark as the InstallUpgrade transaction category
+        .RuntimeArgs(rargs)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(500_000_000_000UL, 1) // 500 CSPR for the install (295KB wasm)
+        .Build();
+    tx.Sign(agentKp);
+
+    var client = Rpc(cfg);
+    Console.WriteLine($"Installing GovernedVault ({wasm.Length} bytes)...");
+    try
+    {
+        await client.PutTransaction(tx);
+        Console.WriteLine($"Accepted. tx: {tx.Hash}");
+        Console.WriteLine($"https://testnet.cspr.live/transaction/{tx.Hash}");
+    }
+    catch (Exception ex) { Console.WriteLine($"REJECTED (pre-inclusion): {ex.Message}"); return; }
+
+    for (int i = 1; i <= 30; i++)
+    {
+        await Task.Delay(5000);
+        try
+        {
+            var er = (await client.GetTransaction(tx.Hash, System.Threading.CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+            if (er is not null)
+            {
+                Console.WriteLine($"EXECUTED IsSuccess={er.IsSuccess} cost={er.Cost}");
+                if (!er.IsSuccess) Console.WriteLine($"  error: {er.ErrorMessage}");
+                else Console.WriteLine("  OK GovernedVault installed — find its package hash under the agent account's named keys.");
+                return;
+            }
+            Console.WriteLine($"  [{i * 5,3}s] pending...");
+        }
+        catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
+    }
+    Console.WriteLine("Timed out.");
+}
+
 // Call tighten_cap on the deployed GovernedVault (agent-authorized, emits CapTightened).
 // usage: vault-tighten <contract-hash> [newCapMotes]
 async Task VaultTighten()
 {
     var cfg = Config();
     if (args.Length < 2) { Console.WriteLine("usage: vault-tighten <contract-hash> [newCapMotes]"); return; }
-    var contractHash = args[1];
+    var pkg = args[1].Replace("hash-", "");
     var newCap = args.Length > 2 ? ulong.Parse(args[2]) : 1_000_000_000UL;
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
 
     var tx = new Transaction.ContractCallBuilder()
-        .ByHash(contractHash)
+        .ByPackageHash(pkg, null, null)
         .EntryPoint("tighten_cap")
         .RuntimeArgs(new List<NamedArg> { new NamedArg("new_cap", CLValue.U512(newCap)) })
         .From(agentKp.PublicKey)
@@ -318,7 +439,7 @@ async Task VaultTighten()
     tx.Sign(agentKp);
 
     var client = Rpc(cfg);
-    Console.WriteLine($"Calling tighten_cap(new_cap={newCap}) on {contractHash}...");
+    Console.WriteLine($"Calling tighten_cap(new_cap={newCap}) on package {pkg}...");
     try
     {
         await client.PutTransaction(tx);

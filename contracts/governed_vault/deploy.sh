@@ -21,7 +21,7 @@ if ! command -v wasm-strip >/dev/null 2>&1; then
 fi
 wasm-strip --version || true
 
-echo "=== build (with wasm-opt) ==="
+echo "=== test ==="
+cargo test --color never 2>&1 | tail -15
+echo "=== build wasm (with wasm-opt) ==="
 cargo odra build 2>&1 | tail -8
-echo "=== deploy ==="
-cargo run --bin governed_vault_livenet --features livenet 2>&1 | tail -25

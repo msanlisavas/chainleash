@@ -24,6 +24,7 @@ pub enum Error {
     CapNotLower = 7,
     NoSuchProposal = 8,
     ProposalAlreadyResolved = 9,
+    AlreadyInitialized = 10,
 }
 
 #[odra::odra_type]
@@ -107,8 +108,13 @@ pub struct GovernedVault {
 
 #[odra::module]
 impl GovernedVault {
-    /// Initialize with the agent + owner accounts and the initial per-action cap.
-    pub fn init(&mut self, agent: Address, owner: Address, value_cap: U512) {
+    /// One-time initialization, called once after deploy via a normal contract call
+    /// (deliberately NOT an Odra constructor, so the contract installs with no
+    /// constructor args). Reverts if already initialized.
+    pub fn initialize(&mut self, agent: Address, owner: Address, value_cap: U512) {
+        if self.agent.get().is_some() {
+            self.env().revert(Error::AlreadyInitialized);
+        }
         self.agent.set(agent);
         self.owner.set(owner);
         self.value_cap.set(value_cap);
@@ -288,7 +294,7 @@ impl GovernedVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use odra::host::{Deployer, HostRef};
+    use odra::host::{Deployer, HostRef, NoArgs};
 
     fn u(n: u64) -> U512 {
         U512::from(n)
@@ -299,12 +305,8 @@ mod tests {
         let owner = env.get_account(0);
         let agent = env.get_account(1);
         let counterparty = env.get_account(2);
-        let init = GovernedVaultInitArgs {
-            agent,
-            owner,
-            value_cap: u(1000),
-        };
-        let mut vault = GovernedVault::deploy(&env, init);
+        let mut vault = GovernedVault::deploy(&env, NoArgs);
+        vault.initialize(agent, owner, u(1000));
         env.set_caller(owner);
         vault.set_allowlist(counterparty, true);
         env.set_caller(owner);
