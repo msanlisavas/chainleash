@@ -6,6 +6,10 @@
 
 <p align="center"><em>Controlled autonomy the chain enforces — auditable per decision.</em></p>
 
+<p align="center">
+  <a href="https://github.com/msanlisavas/chainleash/actions/workflows/ci.yml"><img src="https://github.com/msanlisavas/chainleash/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+</p>
+
 CHAINLEASH is the **bonded, chain-enforced leash for autonomous money-moving agents
 on Casper** — proven by an AI that governs **native CSPR staking** for institutions
 that hold large CSPR balances (exchanges, custodians, treasuries). The agent

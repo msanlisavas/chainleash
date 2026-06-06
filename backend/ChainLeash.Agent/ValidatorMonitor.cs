@@ -45,10 +45,8 @@ public sealed class ValidatorMonitor
                 list.Add(new Assessment(pk, -1, false, 0, false, "not in current era set"));
                 continue;
             }
-            var compliant = m.IsActive && m.FeePercent <= max;
-            var note = !m.IsActive ? "inactive (evicted/unbonded)"
-                     : m.FeePercent > max ? $"commission {m.FeePercent}% > policy {max}%"
-                     : $"commission {m.FeePercent}% ≤ policy {max}%";
+            var compliant = StakingPolicy.IsCompliant(m.FeePercent, m.IsActive, max);
+            var note = StakingPolicy.ComplianceNote(m.FeePercent, m.IsActive, max);
             list.Add(new Assessment(pk, m.FeePercent, m.IsActive, m.StakeCspr, compliant, note));
         }
 
