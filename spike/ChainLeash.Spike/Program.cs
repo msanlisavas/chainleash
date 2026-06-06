@@ -45,6 +45,12 @@ switch (command)
     case "vault-deploy": await VaultDeploy(); break;
     case "vault-find": await VaultFind(); break;
     case "vault-init": await VaultInit(); break;
+    case "vault-set-validator": await VaultSetValidator(); break;
+    case "vault-deposit": await VaultDeposit(); break;
+    case "vault-delegate": await VaultDelegate(); break;
+    case "vault-propose": await VaultPropose(); break;
+    case "vault-approve": await VaultApprove(); break;
+    case "fund": await Fund(); break;
     case "setup-keys": await SetupKeys(); break;
 
     case "attempt-overreach": await AttemptOverreach(); break;
@@ -305,8 +311,9 @@ void AccountHashes()
 async Task VaultInit()
 {
     var cfg = Config();
-    if (args.Length < 2) { Console.WriteLine("usage: vault-init <package-hash>"); return; }
+    if (args.Length < 2) { Console.WriteLine("usage: vault-init <package-hash> [capMotes]"); return; }
     var pkg = args[1].Replace("hash-", "");
+    var capMotes = args.Length > 2 ? ulong.Parse(args[2]) : 600_000_000_000UL; // 600 CSPR per-action cap
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
     var humanPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim());
 
@@ -317,7 +324,7 @@ async Task VaultInit()
         {
             new NamedArg("agent", CLValue.KeyFromPublicKey(agentKp.PublicKey)),
             new NamedArg("owner", CLValue.KeyFromPublicKey(humanPk)),
-            new NamedArg("value_cap", CLValue.U512(2_000_000_000UL)),
+            new NamedArg("value_cap", CLValue.U512(capMotes)),
         })
         .From(agentKp.PublicKey)
         .ChainName(cfg["ChainName"]!)
@@ -468,9 +475,217 @@ async Task VaultTighten()
     Console.WriteLine("Timed out.");
 }
 
+// Owner (human key, weight 3) allowlists a validator on the GovernedVault.
+// usage: vault-set-validator <package-hash> <validatorHex> [true|false]
+async Task VaultSetValidator()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-set-validator <package-hash> <validatorHex> [true|false]"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var validator = PublicKey.FromHexString(args[2]);
+    var allowed = args.Length < 4 || bool.Parse(args[3]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("set_validator")
+        .RuntimeArgs(new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("allowed", CLValue.Bool(allowed)),
+        })
+        .From(humanKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1)
+        .Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner allowlists validator {args[2][..12]}… (allowed={allowed})");
+}
+
+// Fund the vault's purse via Odra's payable proxy (proxy_caller.wasm run as session).
+// The proxy creates a cargo purse, moves `amount` from the agent's main purse into
+// it, and forwards it to the contract's payable deposit_treasury entry point.
+// usage: vault-deposit <package-hash> <motes>
+async Task VaultDeposit()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-deposit <package-hash> <motes>"); return; }
+    var pkgBytes = Convert.FromHexString(args[1].Replace("hash-", ""));
+    var motes = ulong.Parse(args[2]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var proxyPath = cfg["ProxyCallerWasmPath"] ?? "../../contracts/governed_vault/wasm/proxy_caller.wasm";
+    if (!File.Exists(proxyPath)) { Console.WriteLine($"proxy wasm not found: {proxyPath}"); return; }
+    var proxy = File.ReadAllBytes(proxyPath);
+
+    // Inner args for deposit_treasury are empty → serialized RuntimeArgs = 4 zero bytes,
+    // passed as List(U8) so the CLType matches casper's `Bytes` (List<u8>). The proxy
+    // deserializes this, injects `cargo_purse`, and calls the contract.
+    var innerArgs = CLValue.List(new[] { CLValue.U8(0), CLValue.U8(0), CLValue.U8(0), CLValue.U8(0) });
+
+    var rargs = new List<NamedArg>
+    {
+        new NamedArg("package_hash", CLValue.ByteArray(pkgBytes)),
+        new NamedArg("entry_point", CLValue.String("deposit_treasury")),
+        new NamedArg("args", innerArgs),
+        new NamedArg("attached_value", CLValue.U512(motes)),
+        new NamedArg("amount", CLValue.U512(motes)),
+    };
+
+    var tx = new Transaction.SessionBuilder()
+        .From(agentKp.PublicKey)
+        .Wasm(proxy)
+        .RuntimeArgs(rargs)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(20_000_000_000UL, 1) // 20 CSPR gas; the deposited `amount` moves separately from the main purse
+        .Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Funding vault purse with {motes / 1_000_000_000m:N0} CSPR via payable proxy");
+}
+
+// Agent delegates vault-held CSPR to an allowlisted validator (routine, ≤ cap).
+// The contract delegates from ITS OWN purse — the decisive contract-custodial test.
+// usage: vault-delegate <package-hash> <validatorHex> <motes>
+async Task VaultDelegate()
+{
+    var cfg = Config();
+    if (args.Length < 4) { Console.WriteLine("usage: vault-delegate <package-hash> <validatorHex> <motes>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var validator = PublicKey.FromHexString(args[2]);
+    var motes = ulong.Parse(args[3]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("delegate")
+        .RuntimeArgs(new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("amount", CLValue.U512(motes)),
+        })
+        .From(agentKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(30_000_000_000UL, 1) // 30 CSPR gas (auction interaction)
+        .Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Agent delegates {motes / 1_000_000_000m:N0} CSPR to {args[2][..12]}… (from vault purse)");
+}
+
+// Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed,
+// awaiting the owner's co-sign. The first proposal has id 0.
+// usage: vault-propose <package-hash> <validatorHex> <motes> [undelegate]
+async Task VaultPropose()
+{
+    var cfg = Config();
+    if (args.Length < 4) { Console.WriteLine("usage: vault-propose <package-hash> <validatorHex> <motes> [undelegate]"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var validator = PublicKey.FromHexString(args[2]);
+    var motes = ulong.Parse(args[3]);
+    var undelegate = args.Length > 4 && bool.Parse(args[4]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("propose_material")
+        .RuntimeArgs(new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("amount", CLValue.U512(motes)),
+            new NamedArg("undelegate", CLValue.Bool(undelegate)),
+        })
+        .From(agentKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1)
+        .Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Agent proposes MATERIAL {(undelegate ? "undelegate" : "delegate")} {motes / 1_000_000_000m:N0} CSPR (over cap) → awaits owner co-sign");
+}
+
+// Owner (human key, weight 3) co-signs and executes a pending material proposal.
+// usage: vault-approve <package-hash> <id>
+async Task VaultApprove()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-approve <package-hash> <id>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var id = uint.Parse(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("approve_material")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) })
+        .From(humanKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(30_000_000_000UL, 1) // executes the (un)delegation → auction interaction
+        .Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner co-signs material proposal #{id} → executes on-chain");
+}
+
+// Native CSPR transfer from the agent to another account (e.g. top up the human for gas).
+// usage: fund <agent|human|HEX> <motes>
+async Task Fund()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: fund <agent|human|HEX> <motes>"); return; }
+    var targetHex = args[1] switch
+    {
+        "agent" => File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim(),
+        "human" => File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim(),
+        var h => h,
+    };
+    var target = PublicKey.FromHexString(targetHex);
+    var motes = ulong.Parse(args[2]);
+    var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
+
+    var tx = new Transaction.NativeTransferBuilder()
+        .From(agentKp.PublicKey)
+        .Target(target)
+        .Amount(motes)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(100_000_000UL)
+        .Build();
+    tx.Sign(agentKp);
+    await Submit(Rpc(cfg), tx, $"Transfer {motes / 1_000_000_000m:N2} CSPR to {args[1]}");
+}
+
+// Submit a transaction and poll for the on-chain execution result.
+async Task Submit(NetCasperClient client, Transaction tx, string label)
+{
+    Console.WriteLine($"{label}...");
+    try
+    {
+        await client.PutTransaction(tx);
+        Console.WriteLine($"tx: {tx.Hash}");
+        Console.WriteLine($"https://testnet.cspr.live/transaction/{tx.Hash}");
+    }
+    catch (Exception ex) { Console.WriteLine($"REJECTED (pre-inclusion): {ex.Message}"); return; }
+
+    for (int i = 1; i <= 30; i++)
+    {
+        await Task.Delay(5000);
+        try
+        {
+            var er = (await client.GetTransaction(tx.Hash, System.Threading.CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
+            if (er is not null)
+            {
+                Console.WriteLine($"EXECUTED IsSuccess={er.IsSuccess} cost={er.Cost}");
+                if (!er.IsSuccess) Console.WriteLine($"  error: {er.ErrorMessage}");
+                else Console.WriteLine("  OK");
+                return;
+            }
+            Console.WriteLine($"  [{i * 5,3}s] pending...");
+        }
+        catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
+    }
+    Console.WriteLine("Timed out.");
+}
+
 void Help()
 {
     Console.WriteLine("CHAINLEASH spike harness — commands:");
-    Console.WriteLine("  keygen  smoke  balance  account-hash  setup-keys  attempt-overreach  cosign-op  help");
+    Console.WriteLine("  keygen  smoke  balance  account-hash  setup-keys  attempt-overreach  cosign-op");
+    Console.WriteLine("  vault-deploy  vault-find  vault-init  vault-set-validator  vault-deposit  vault-delegate  vault-tighten  fund  help");
     Console.WriteLine("Run:  dotnet run -- <command>");
 }
