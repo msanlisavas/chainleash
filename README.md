@@ -78,28 +78,30 @@ yield; the agent only switches validators when the gain outweighs the unbonding 
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
-[`cd59684f…def3`](https://testnet.cspr.live/contract-package/cd59684f7e1cef2e2a78fd8e8c184a00282b9a9af1e981679778e6628440def3),
-security-hardened — see below). Selected on-chain artifacts (click to verify):
+[`716d71bd…25aa0`](https://testnet.cspr.live/contract-package/716d71bded4901c66169e7b4b207f043a75f6ffe1fc037ab9e25d89425b25aa0)).
+Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
 |------|-------------|
-| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`13f64ab8…`](https://testnet.cspr.live/transaction/13f64ab8ba8bf750725e871d6f5a4b1161de92e71b157c178d4470fc76332386) |
-| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`48bc83b7…`](https://testnet.cspr.live/transaction/48bc83b7b917729a5a6a2a3fa1c3ccc0bb702cbe4f173af180454278461f5983) |
-| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`51ac564e…`](https://testnet.cspr.live/transaction/51ac564e46bad08b76d5bc94e30a0f650f06330bd5beca1929cc0b9e01bb45b7) |
-| Over per-validator cap — **rejected on-chain** (`PerValidatorCapExceeded`, decentralization) | [`a0329999…`](https://testnet.cspr.live/transaction/a032999904f8bf15f99b6f5ea1364d0b3cb479c855188f14f386676fc5f27e04) |
-| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`d3b33da8…`](https://testnet.cspr.live/transaction/d3b33da8011f650fd5c79a542bc4da2da1e5b9ad851e35aeadb6fe480094c382) |
-| Human owner **co-signs** → a material (over-cap) move executes | [`0698ef55…`](https://testnet.cspr.live/transaction/0698ef55be3d2ed29fe5f4d766e0488d8d77183d35368d67c6018ad512d74c07) |
-| Agent **undelegates** 200 CSPR back to the vault | [`1e8a8db7…`](https://testnet.cspr.live/transaction/1e8a8db71e7538817317607b15a47b4b4a60cd28c72678e722e7cd9ccb50711e) |
+| Agent **autonomously delegates** 500 CSPR from the vault's purse (≤ cap, allowlisted) | [`c783f8c1…`](https://testnet.cspr.live/transaction/c783f8c10bc7e578596241fe9a4db4b857d282ac47853cb70474725cf410f66a) |
+| Agent **redelegates** 500 CSPR validator→validator in one native tx | [`2af8eb9a…`](https://testnet.cspr.live/transaction/2af8eb9afb1bbe199c8e4f8ee9f2a57b4d17f5dad86c092a41a26dba2ef6051a) |
+| Over-cap delegate (700 > 600 cap) — **rejected on-chain** (`OverCap`) | [`c5d4a066…`](https://testnet.cspr.live/transaction/c5d4a06628fc0dafa9953e0ac195167992bac807ca254b429a3124a744697469) |
+| Over per-validator cap — **rejected on-chain** (`PerValidatorCapExceeded`, decentralization) | [`6640b9ae…`](https://testnet.cspr.live/transaction/6640b9aea8332d185a23333f471945df6354a91ebdc85262c19d17630af1fe7a) |
+| Owner **kill-switch** engaged → agent move **rejected on-chain** (`Paused`) | [`f8223959…`](https://testnet.cspr.live/transaction/f82239599e1248ce4cdfb29afb6a263e350ccfa8c145137700c7287cd466e908) |
+| Human owner **co-signs** → a material (over-cap) move executes | [`0f72d184…`](https://testnet.cspr.live/transaction/0f72d18452092c648c6fa62a9446bdbaf0b56cb030ef20372f2a9d73835e51d8) |
+| Agent **undelegates** 200 CSPR back to the vault | [`1711d4af…`](https://testnet.cspr.live/transaction/1711d4afde1b298b2d793b5ace55c0c2b9e847f7466e6318c47be69fe15801ff) |
+| Owner **slashes the agent's bond** on a violation (forfeited to owner — real economic teeth) | [`0b9fbf5f…`](https://testnet.cspr.live/transaction/0b9fbf5f80bac6c800a74791079f737ad341b2116df6b7d4666426523da92ca9) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
 
 ### Security-reviewed
 
-I ran an adversarial multi-agent security review against the leash invariants and fixed
-every finding before this deployment: the initializer is now an installer-gated `init`
-constructor (no front-run window), the per-validator cap and kill-switch are enforced on
-the material co-sign path too, the cap uses a lag-free in-contract accumulator, and
-`withdraw` reserves the agent's bond. 22/22 contract tests, including regression tests for
-each fix.
+I ran two adversarial multi-agent reviews (a leash-invariant red-team and a
+completion audit) and fixed every finding. The initializer is an installer-gated
+`init` constructor (no front-run window); the per-validator cap + kill-switch are
+enforced on the material path too; the cap uses a lag-free in-contract accumulator;
+`withdraw` reserves the bond; the bond is genuinely **slashable** (forfeit to owner)
+and **returnable**; and ownership/agent keys are **recoverable** (`transfer_ownership`
+/ `set_agent`). 26/26 contract tests with regression coverage for each fix.
 
 Earlier artifacts (autonomous policy-breach exit, non-allowlisted rejection, weighted-key
 over-reach) are catalogued in the deploy notes.
