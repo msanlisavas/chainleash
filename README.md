@@ -4,70 +4,68 @@
 
 <h1 align="center">CHAINLEASH</h1>
 
-<p align="center"><em>Controlled autonomy the chain enforces — auditable per decision.</em></p>
+<p align="center"><em>The trust layer for autonomous money-moving agents on Casper — controlled autonomy the chain enforces, auditable per decision.</em></p>
 
 <p align="center">
   <a href="https://github.com/msanlisavas/chainleash/actions/workflows/ci.yml"><img src="https://github.com/msanlisavas/chainleash/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
 </p>
 
-CHAINLEASH is the **bonded, chain-enforced leash for autonomous money-moving agents
-on Casper** — proven by an AI that governs **native CSPR staking** for institutions
-that hold large CSPR balances (exchanges, custodians, treasuries). The agent
-rebalances delegations across validators to enforce a published policy, but **what
-it can do is enforced by Casper itself — not by the server**:
+**CHAINLEASH is the bonded, chain-enforced leash for autonomous money-moving agents on Casper** — an agent that can rebalance, but cannot steal.
 
-- the funds live in a deployed Odra **`GovernedVault`** contract that delegates them;
-- the agent can only delegate **within a per-action value cap**, and only to
-  **allowlisted validators** — the chain rejects anything else;
-- **the agent has no withdraw path** — only the human/institution owner can move
-  CSPR out of the vault. A fully compromised agent can mis-delegate within the
-  leash; it can never steal;
-- over-cap "material" moves require an explicit **human co-sign** (propose → approve);
-- the owner can set a **per-validator cap** (no over-concentration → decentralization), an
-  **action cooldown** (anti-thrash), and a one-call **kill-switch** that freezes the agent;
-- the treasury account's **native weighted keys** put the agent key *below* the
-  `key_management` threshold, so the agent can never expand its own authority or
-  rotate keys. The leash can tighten itself; only a human loosens it.
+It is proven by an AI that governs **native CSPR staking** for institutions holding large CSPR balances — exchanges, custodians, and treasuries. The agent rebalances delegations across validators to execute a published policy, but **what it can do is enforced by Casper itself, not by the server.** The security of the money does not depend on the security of the agent process: a fully compromised agent can mis-delegate within its limits, but it can never steal.
 
-This maps directly to the Casper Manifest's thesis: **the trust layer for the agent economy.**
+```
+funds in contract  ·  per-action cap  ·  validator allowlist  ·  owner-only withdraw
+slashable bond  ·  human co-sign on material moves  ·  one-call kill-switch
+```
 
 <p align="center">
   <img src="assets/dashboard.png" alt="CHAINLEASH live dashboard" width="820" />
   <br/><em>The live dashboard — every agent decision streamed on-chain, with the leash enforced by the Casper contract.</em>
 </p>
 
-## Built only on what Casper actually has
+## The leash: enforced by the chain, not the server
 
-Casper's real, deep economic primitive today is **native staking / delegation** — so
-that is what the agent governs. No fictional DeFi venue, no bridged T-bills: a Casper
-2.0 contract delegates from its own purse (the auction identifies the delegator by
-purse, not public key), which makes the value cap and allowlist **fully chain-enforced**.
-As Casper ships more on-chain venues, the same leash extends to them.
+The agent's authority is bounded by the protocol and the contract, not by trust in the server:
+
+- **Funds live in the contract.** The CSPR sits in a deployed Odra **`GovernedVault`** that delegates from its own purse. The agent never custodies it.
+- **Value cap.** The agent can only delegate within a per-action value cap — the chain rejects anything over.
+- **Validator allowlist.** The agent can only delegate to allowlisted validators — the chain rejects anything else.
+- **No agent withdraw path.** Only the human/institution owner can move CSPR out of the vault. A fully compromised agent can mis-delegate within the leash; it can never exfiltrate funds.
+- **Human co-sign on material moves.** Over-cap "material" moves require an explicit owner approval (propose → approve).
+- **Owner guardrails.** A per-validator cap (no over-concentration), an action cooldown (anti-thrash), and a one-call kill-switch that freezes the agent.
+- **Weighted-key authority floor.** The treasury account's native weighted keys place the agent key *below* the `key_management` threshold, so the agent can never expand its own authority or rotate keys. The leash can tighten itself; only a human can loosen it.
+- **Slashable bond.** The agent posts a CSPR bond that the owner can forfeit on a logged violation — real economic teeth. This is CHAINLEASH's own mechanism: Casper has no protocol slashing, so the bond is the product's economic backstop, not a chain feature.
+
+## Built on Casper's real on-chain primitive
+
+Casper's deep, native economic primitive today is **staking / delegation**, so that is what the agent governs. A Casper 2.0 contract delegates from its own purse — the auction identifies the delegator by purse, not by public key — which makes the value cap and validator allowlist **fully chain-enforced** rather than advisory. As Casper ships more on-chain venues, the same leash extends to cover them.
 
 ## Why it's different
 
-Incumbents (Coinbase Agentic Wallets, AWS Bedrock AgentCore) enforce agent spend
-limits **off-chain inside an enclave** — the security of the money equals the security
-of the server. CHAINLEASH makes the limit a **protocol + contract** guarantee
-(cap + allowlist + owner-only withdraw, all chain-enforced), and pairs it with an
-agent that **pays to think**: before acting it buys a premium risk read over
-Casper-native **x402** — a real CSPR settlement the provider **verifies on-chain**
-(recipient, amount, finality) and won't accept twice (replay-protected); the read
-itself is derived from **live validator metrics**, not mock data. And when the policy
-is satisfied and nothing is off-policy, the agent **chooses not to act at all**.
+Incumbents (Coinbase Agentic Wallets, AWS Bedrock AgentCore) enforce agent spend limits **off-chain inside an enclave** — the security of the money equals the security of the server. CHAINLEASH makes the limit a **protocol + contract** guarantee: cap, allowlist, and owner-only withdraw are all enforced on-chain.
+
+It pairs that guarantee with an agent that **pays to think.** Before acting, the agent buys a premium risk read over Casper-native **x402** — a real CSPR settlement the provider **verifies on-chain** (recipient, amount, finality) and refuses to accept twice (replay-protected). The read itself is derived from **live validator metrics**, not mock data. And when the policy is satisfied and nothing is off-policy, the agent **chooses not to act at all** — restraint as a first-class behavior.
+
+## How the agent works
+
+Each tick, the agent:
+
+1. **Perceives** the allowlisted validators via live CSPR.cloud metrics (commission, active status, stake).
+2. **Scores** them against the **published delegation policy** (max commission, must-be-active).
+3. **Pays to think** — if there's an actionable opportunity, it buys a premium risk read over x402.
+4. **Acts within the leash** — deploys idle treasury to the lowest-commission compliant validator (routine, ≤ cap); when a delegated validator breaches policy (e.g. a commission hike), it **redelegates** that stake straight to the best compliant validator in one native tx; over-cap or elevated-risk moves are escalated to a human-co-signed proposal.
+5. **Or chooses not to act** — restraint as intelligence. When the policy is satisfied and nothing is off-policy, the agent stays put.
+
+Institutions want an agent that *executes a published rule auditably*, not one that exercises opaque discretion — so the policy is deterministic and every decision is recorded on-chain.
 
 ## Business model
 
-Primary: **B2B SaaS / licensing** to exchanges, custodians, and institutional treasuries
-that stake CSPR for users and need auditable, bonded, kill-switchable automation. Later:
-**basis points on governed (staked) AUM**. Not a data marketplace and not trading fees —
-validator data is public, so the moat is the *leash*, not the data.
+Primary: **B2B SaaS / licensing** to exchanges, custodians, and institutional treasuries that stake CSPR for users and need auditable, bonded, kill-switchable automation. Later: **basis points on governed (staked) AUM**. Not a data marketplace and not trading fees — validator data is public, so the moat is the *leash*, not the data.
 
 ## Works for any CSPR holder — multisig-ready
 
-The same engine serves a 10M-CSPR individual and a 500M-CSPR institution; only the
-cap, allowlist, bond, and policy params differ. Each holder runs **their own vault**,
-and standing one up is **one command**:
+The same engine serves a 10M-CSPR individual and a 500M-CSPR institution; only the cap, allowlist, bond, and policy parameters differ. Each holder runs **their own vault**, and standing one up is **one command**:
 
 ```bash
 # Linux / macOS
@@ -83,19 +81,9 @@ and standing one up is **one command**:
   -DepositCspr 1000 -BondCspr 300
 ```
 
-That deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms the
-validator allowlist on-chain, optionally funds it and posts the bond, and **points the
-agent at the new vault** by writing its config — so one config-driven agent can serve
-many vaults. Manual steps are in the [RUNBOOK](RUNBOOK.md).
+That deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms the validator allowlist on-chain, optionally funds it and posts the bond, and **points the agent at the new vault** by writing its config — so one config-driven agent can serve many vaults. Manual steps are in the [RUNBOOK](RUNBOOK.md).
 
-**Multisig is native.** The owner can be any Casper account, including a **weighted-key
-(M-of-N multisig) account** that big wallets already support — so a material move can
-require, say, **2-of-3 human signatures** (the contract's owner-gated `approve_material`
-inherits the owner account's signature threshold; no extra contract logic). CHAINLEASH
-already uses this primitive on the *agent* side — the agent key sits below the account's
-`key_management` threshold, proven on-chain — so the same weighted-key mechanism secures
-the owner side too. And rewards **auto-compound** natively, so simply holding never loses
-yield; the agent only switches validators when the gain outweighs the unbonding cost.
+**Multisig is native.** The owner can be any Casper account, including a **weighted-key (M-of-N multisig) account** that large wallets already support — so a material move can require, for example, **2-of-3 human signatures**. The contract's owner-gated `approve_material` inherits the owner account's signature threshold directly, with no extra contract logic. CHAINLEASH already relies on this primitive on the *agent* side, where the agent key sits below the account's `key_management` threshold (proven on-chain), so the same weighted-key mechanism secures the owner side too. And because rewards **auto-compound** natively on Casper, simply holding never loses yield; the agent only switches validators when the gain outweighs the unbonding cost.
 
 ## Proven on Casper 2.0 testnet
 
@@ -115,48 +103,19 @@ Selected on-chain artifacts (click to verify):
 | Owner **slashes the agent's bond** on a violation (forfeited to owner — real economic teeth) | [`de19786a…`](https://testnet.cspr.live/transaction/de19786adb70a49abddbff3f1c8814285c35837577757b0c701a7db03f1513c1) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
 
-### Security-reviewed
+### Independently security-reviewed
 
-I ran three adversarial multi-agent reviews (a leash-invariant red-team, a completion
-audit, and a full security + quality review) and fixed every finding. The last review
-landed **0 critical / 0 high** and independently verified the core guarantee: a fully
-compromised agent can mis-delegate within the leash but has **no path to move CSPR out
-of the vault** — every exit is owner-gated and `withdraw` reserves the bond.
+CHAINLEASH has been through three adversarial multi-agent security reviews — a leash-invariant red-team, a completion audit, and a full security + quality review — with every finding fixed. The final review landed **0 critical / 0 high** and independently verified the core guarantee: a fully compromised agent can mis-delegate within the leash but has **no path to move CSPR out of the vault** — every exit is owner-gated, and `withdraw` reserves the bond.
 
-On-chain: installer-gated `init` (no front-run window); the per-validator cap + kill-switch
-are enforced on the material path too; a lag-free in-contract accumulator; the agent's
-undelegate/redelegate are bounded by what it actually directed (a compromised agent can't
-even grief positions into unbonding); the bond is genuinely **slashable** and **returnable**;
-ownership/agent keys are **recoverable**. Off-chain: the API locks CORS to the dashboard
-origin, rate-limits the public endpoints, makes the co-sign confirm single-use + fail-closed
-(a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback
-off-by-default + fail-closed. **31 contract tests + 37 backend tests**, with regression
-coverage for each fix.
+**On-chain hardening:** installer-gated `init` (no front-run window); the per-validator cap and kill-switch are enforced on the material path too; a lag-free in-contract accumulator; the agent's undelegate/redelegate are bounded by what it actually directed (a compromised agent can't even grief positions into unbonding); a genuinely **slashable** and **returnable** bond; and **recoverable** ownership/agent keys.
 
-Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted
-rejection, and a weighted-key over-reach attempt being blocked.
+**Off-chain hardening:** the API locks CORS to the dashboard origin, rate-limits the public endpoints, makes the co-sign confirm single-use and fail-closed (a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback off-by-default and fail-closed.
 
-## How the agent works
-
-Each tick the agent:
-1. **perceives** the allowlisted validators via live CSPR.cloud metrics (commission,
-   active status, stake);
-2. scores them against the **published delegation policy** (max commission, must-be-active);
-3. if there's an actionable opportunity, **pays over x402** for a premium risk read;
-4. **acts within the leash** — deploys idle treasury to the lowest-commission compliant
-   validator (routine, ≤ cap); when a delegated validator breaches policy (e.g. a
-   commission hike) it **redelegates** that stake straight to the best compliant
-   validator in one native tx; over-cap or elevated-risk moves are escalated to a
-   human-co-signed proposal;
-5. otherwise **chooses not to act** — restraint as intelligence.
-
-Institutions want the agent to *execute a published rule auditably*, not to exercise
-opaque discretion — so the policy is deterministic and every decision is on-chain.
+**Coverage:** 31 contract tests + 37 backend tests, with regression coverage for each fix. Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
 
 ## Run it
 
-There are two ways to run, depending on whether you want to **watch** the live vault or
-**drive your own**.
+There are two ways to run, depending on whether you want to **watch** the live vault or **drive your own**.
 
 **1. Observer mode — watch the live demo vault (zero setup):**
 
@@ -165,16 +124,11 @@ cp .env.example .env        # defaults point at the live demo vault + public tes
 docker compose up --build
 ```
 
-With no agent key present, the agent boots **read-only**: it streams the live demo vault's
-leash state (cap, bond, balances, validators) to the dashboard but signs nothing. Dashboard
-+ API at `http://localhost:5179`, signal provider at `:5080`, and `GET /health` reports
-chain reachability + `readOnly: true`. This is the fastest way to see CHAINLEASH live —
-note the demo vault is bound on-chain to *my* agent key, so **only its owner can drive it**.
+With no agent key present, the agent boots **read-only**: it streams the live demo vault's leash state (cap, bond, balances, validators) to the dashboard but signs nothing. Dashboard + API at `http://localhost:5179`, signal provider at `:5080`, and `GET /health` reports chain reachability plus `readOnly: true`. This is the fastest way to see CHAINLEASH live — note the demo vault is bound on-chain to a specific agent key, so **only its owner can drive it**.
 
 **2. Drive your own vault (to see the agent actually act):**
 
-To watch the agent delegate/redelegate/escalate, deploy your **own** vault — its agent key
-is yours, so the chain accepts its moves:
+To watch the agent delegate / redelegate / escalate, deploy your **own** vault — its agent key is yours, so the chain accepts its moves:
 
 ```bash
 # 1) generate keys, fund BOTH at the faucet (~600+ CSPR for the agent: ~500 is install gas)
@@ -187,39 +141,19 @@ cd spike/ChainLeash.Spike && dotnet run -- keygen
 docker compose up --build
 ```
 
-Runs on Linux, macOS, and Windows — the agent, contracts, dashboard, and `docker compose`
-are all cross-platform; only the onboarding script has a per-shell variant (`.sh` / `.ps1`).
+Runs on Linux, macOS, and Windows — the agent, contracts, dashboard, and `docker compose` are all cross-platform; only the onboarding script has a per-shell variant (`.sh` / `.ps1`).
 
-The agent's audit feed is **persisted** across restarts, and secrets are mounted read-only —
-never baked into an image. (Local dev without Docker: run `backend/ChainLeash.SignalProvider`
-then `backend/ChainLeash.Agent` with `dotnet run`; the agent serves the dashboard from
-`wwwroot`.) Full details — including faucet/gas budget — are in the [RUNBOOK](RUNBOOK.md).
+The agent's audit feed is **persisted** across restarts, and secrets are mounted read-only — never baked into an image. (Local dev without Docker: run `backend/ChainLeash.SignalProvider`, then `backend/ChainLeash.Agent` with `dotnet run`; the agent serves the dashboard from `wwwroot`.) Full details — including the faucet/gas budget — are in the [RUNBOOK](RUNBOOK.md).
 
 ## Architecture
 
-- **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash —
-  delegate/undelegate/redelegate under a per-action cap, validator allowlist,
-  per-validator cap, action cooldown, owner kill-switch, propose→approve material
-  co-sign, a posted CSPR bond + on-chain violation log, and owner-only withdraw.
-- **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop
-  (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain
-  client (`CasperVault`), and the x402 pay-to-think buyer + provider.
-- **Frontend** (`frontend/`) — Angular dashboard: the **full leash state read live from
-  chain** (per-action cap, free/total balance, slashable bond, per-validator cap,
-  violations, and a prominent kill-switch banner when the owner pauses the agent), a
-  live audit feed, the validator-policy view with per-validator committed stake, x402
-  spend, and the human co-sign action. It re-syncs the snapshot on reconnect and surfaces
-  a clear banner if the agent API is unreachable. The owner **co-signs in their own
-  wallet** via CSPR.click: the agent builds the *unsigned* `approve_material` transaction,
-  the owner signs it in Casper Wallet in-browser, and the agent confirms the result
-  on-chain — **the server holds only the owner's public key, never the secret**. (A
-  server-key co-sign path exists for local dev but is **off by default**.)
+- **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash — delegate / undelegate / redelegate under a per-action cap, validator allowlist, per-validator cap, action cooldown, owner kill-switch, propose→approve material co-sign, a posted CSPR bond with on-chain violation log, and owner-only withdraw.
+- **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain client (`CasperVault`), and the x402 pay-to-think buyer + provider.
+- **Frontend** (`frontend/`) — Angular dashboard: the **full leash state read live from chain** (per-action cap, free/total balance, slashable bond, per-validator cap, violations, and a prominent kill-switch banner when the owner pauses the agent), a live audit feed, the validator-policy view with per-validator committed stake, x402 spend, and the human co-sign action. It re-syncs the snapshot on reconnect and surfaces a clear banner if the agent API is unreachable. The owner **co-signs in their own wallet** via CSPR.click: the agent builds the *unsigned* `approve_material` transaction, the owner signs it in Casper Wallet in-browser, and the agent confirms the result on-chain — **the server holds only the owner's public key, never the secret**. (A server-key co-sign path exists for local dev but is **off by default**.)
 
 ## Status
 
-🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due
-2026-06-30). Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the
-Casper MCP Server.
+🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). Live end-to-end on Casper 2.0 testnet, independently security-reviewed (0 critical / 0 high), and covered by 31 contract + 37 backend tests. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
 
 ## License
 
