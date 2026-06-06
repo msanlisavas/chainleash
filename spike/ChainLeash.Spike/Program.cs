@@ -46,6 +46,9 @@ switch (command)
     case "vault-find": await VaultFind(); break;
     case "vault-init": await VaultInit(); break;
     case "vault-set-validator": await VaultSetValidator(); break;
+    case "vault-pause": await VaultPause(); break;
+    case "vault-set-maxval": await VaultSetMaxVal(); break;
+    case "vault-set-interval": await VaultSetInterval(); break;
     case "vault-deposit": await VaultDeposit(); break;
     case "vault-delegate": await VaultDelegate(); break;
     case "vault-undelegate": await VaultUndelegate(); break;
@@ -475,6 +478,54 @@ async Task VaultTighten()
         catch (Exception ex) { Console.WriteLine($"  poll: {ex.Message}"); }
     }
     Console.WriteLine("Timed out.");
+}
+
+// Owner kill-switch — pause/unpause all agent moves. usage: vault-pause <pkg> <true|false>
+async Task VaultPause()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-pause <package-hash> <true|false>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var paused = bool.Parse(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null).EntryPoint("set_paused")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("paused", CLValue.Bool(paused)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(5_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner sets kill-switch paused={paused}");
+}
+
+// Owner sets the per-validator stake ceiling (0 = unlimited). usage: vault-set-maxval <pkg> <motes>
+async Task VaultSetMaxVal()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-set-maxval <package-hash> <motes>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var max = ulong.Parse(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null).EntryPoint("set_max_per_validator")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("max", CLValue.U512(max)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(5_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner sets per-validator cap = {max / 1_000_000_000m:N0} CSPR");
+}
+
+// Owner sets the agent action cooldown in ms (0 = disabled). usage: vault-set-interval <pkg> <ms>
+async Task VaultSetInterval()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-set-interval <package-hash> <ms>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var ms = ulong.Parse(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null).EntryPoint("set_action_interval")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("interval_ms", CLValue.U64(ms)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(5_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner sets action cooldown = {ms} ms");
 }
 
 // Owner (human key, weight 3) allowlists a validator on the GovernedVault.
