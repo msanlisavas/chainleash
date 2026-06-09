@@ -39,13 +39,26 @@ docker compose up --build
 
 Secrets are mounted read-only; the audit feed persists in a named volume.
 
+**Upgrading an existing deployment:** the containers now run as a non-root user. A
+`chainleash-data` volume created by an older (root-running) image is root-owned, which
+silently breaks feed persistence (the agent logs a one-time warning). Reset it once with
+`docker compose down && docker volume rm chainleash-data` — the feed restarts empty; the
+leash state is always re-read from chain anyway. On native Linux, if you ran observer
+mode before `keygen`, Docker may have created `spike/ChainLeash.Spike/secrets/agent` as
+root — `sudo chown -R $USER spike/ChainLeash.Spike/secrets` before generating keys.
+
+**Driving your own vault?** Also point the x402 pair at YOUR keys in `.env`
+(`X402_PAY_TO`, `X402_PROVIDER_PUBKEY`, `X402_EXPECTED_PAYER` — see `.env.example`),
+or the PAY beat stays bound to the demo identities and the provider will refuse your
+agent's payments.
+
 ## 1. Build + test the contract
 
 ```bash
 docker build -t chainleash-odra tools/odra-build
 docker run --rm -v "$PWD/contracts/governed_vault:/work" \
   -v chainleash-cargo-registry:/usr/local/cargo/registry chainleash-odra \
-  bash /work/deploy.sh        # cargo test (26/26) + cargo odra build -> wasm/GovernedVault.wasm
+  bash /work/deploy.sh        # cargo test (39/39) + cargo odra build -> wasm/GovernedVault.wasm
 ```
 
 ## 2. Deploy + arm your own vault — one command
@@ -144,7 +157,7 @@ writes a fresh config per vault.
 ## 5. Tests
 
 ```bash
-dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + Odra decoders (26)
+dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (59)
 cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (headless)
 ```
 

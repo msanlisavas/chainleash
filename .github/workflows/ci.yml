@@ -5,13 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (.NET 10) — build + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.0.x'
       - name: Test agent (StakingPolicy + Odra byte decoders)
@@ -26,13 +29,13 @@ jobs:
       run:
         working-directory: frontend/dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: frontend/dashboard/package-lock.json
-      - uses: browser-actions/setup-chrome@v1
+      - uses: browser-actions/setup-chrome@c785b87e244131f27c9f19c1a33e2ead956ab7ce # v1
         id: setup-chrome
       - run: npm ci
       - name: Build (AOT — also typechecks every template binding)
@@ -41,3 +44,19 @@ jobs:
         run: npm run test:ci
         env:
           CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
+
+  contract:
+    name: Contract (Odra GovernedVault) — cargo test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/governed_vault
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install the pinned toolchain (rust-toolchain file)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: contracts/governed_vault
+      - name: Test (MockVM — the same 39 tests the Odra container runs)
+        run: cargo test --color never

@@ -2,18 +2,14 @@
 // See docs/superpowers/plans/2026-06-05-chainleash-foundation-spike.md
 //
 // Usage:  dotnet run -- <command>
-//   keygen             Generate agent + human ED25519 key pairs into secrets/
-//   smoke              Verify node RPC + config (prints node API/build version)
-//   balance            Show the agent account balance + thresholds (via CSPR.cloud REST)
-//   setup-keys         [Spike A] add human key (w3) + raise key_management threshold to 3
-//   attempt-overreach  [Spike B] agent-only key_management op — capture what the network returns
-//   cosign-op          [Spike C] human/weighted co-sign success path
-//   help               Show this help
+// Run `dotnet run -- help` for the full grouped command list (key setup, weighted-key
+// spikes, agent/owner vault ops, read-only).
 
 using Casper.Network.SDK;
 using Casper.Network.SDK.Types;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 var command = args.Length > 0 ? args[0].ToLowerInvariant() : "help";
 
@@ -35,41 +31,54 @@ HttpClient AuthedHttp(IConfiguration cfg)
 
 NetCasperClient Rpc(IConfiguration cfg) => new(cfg["NodeRpcUrl"], AuthedHttp(cfg));
 
-switch (command)
+try
 {
-    case "keygen": Keygen(); break;
-    case "smoke": await Smoke(); break;
-    case "balance": await Balance(); break;
-    case "account-hash": AccountHashes(); break;
-    case "vault-tighten": await VaultTighten(); break;
-    case "vault-deploy": await VaultDeploy(); break;
-    case "vault-find": await VaultFind(); break;
-    case "vault-init": await VaultInit(); break;
-    case "vault-set-validator": await VaultSetValidator(); break;
-    case "vault-state": await VaultState(); break;
-    case "vault-bond": await VaultBond(); break;
-    case "vault-slash": await VaultSlash(); break;
-    case "vault-return-bond": await VaultReturnBond(); break;
-    case "vault-transfer-owner": await VaultTransferOwner(); break;
-    case "vault-set-agent": await VaultSetAgent(); break;
-    case "vault-pause": await VaultPause(); break;
-    case "vault-set-maxval": await VaultSetMaxVal(); break;
-    case "vault-set-interval": await VaultSetInterval(); break;
-    case "vault-deposit": await VaultDeposit(); break;
-    case "vault-delegate": await VaultDelegate(); break;
-    case "vault-undelegate": await VaultUndelegate(); break;
-    case "vault-redelegate": await VaultRedelegate(); break;
-    case "vault-propose": await VaultPropose(); break;
-    case "vault-approve": await VaultApprove(); break;
-    case "cosign-prepare": await CosignPrepare(); break;
-    case "fund": await Fund(); break;
-    case "setup-keys": await SetupKeys(); break;
+    switch (command)
+    {
+        case "keygen": Keygen(); break;
+        case "smoke": await Smoke(); break;
+        case "balance": await Balance(); break;
+        case "account-hash": AccountHashes(); break;
+        case "vault-tighten": await VaultTighten(); break;
+        case "vault-deploy": await VaultDeploy(); break;
+        case "vault-find": await VaultFind(); break;
+        case "vault-init": await VaultInit(); break;
+        case "vault-set-validator": await VaultSetValidator(); break;
+        case "vault-state": await VaultState(); break;
+        case "vault-bond": await VaultBond(); break;
+        case "vault-slash": await VaultSlash(); break;
+        case "vault-return-bond": await VaultReturnBond(); break;
+        case "vault-transfer-owner": await VaultTransferOwner(); break;
+        case "vault-set-agent": await VaultSetAgent(); break;
+        case "vault-pause": await VaultPause(); break;
+        case "vault-set-maxval": await VaultSetMaxVal(); break;
+        case "vault-set-interval": await VaultSetInterval(); break;
+        case "vault-deposit": await VaultDeposit(); break;
+        case "vault-delegate": await VaultDelegate(); break;
+        case "vault-undelegate": await VaultUndelegate(); break;
+        case "vault-redelegate": await VaultRedelegate(); break;
+        case "vault-propose": await VaultPropose(); break;
+        case "vault-approve": await VaultApprove(); break;
+        case "vault-reject": await VaultReject(); break;
+        case "cosign-prepare": await CosignPrepare(); break;
+        case "fund": await Fund(); break;
+        case "setup-keys": await SetupKeys(); break;
 
-    case "attempt-overreach": await AttemptOverreach(); break;
+        case "attempt-overreach": await AttemptOverreach(); break;
 
-    case "cosign-op": await CosignOp(); break;
+        case "cosign-op": await CosignOp(); break;
 
-    default: Help(); break;
+        default: Help(); break;
+    }
+}
+catch (Exception ex)
+{
+    // One graceful floor — handlers print their own contextual errors; anything that
+    // escapes (bad args, missing keys, RPC failures) lands here instead of a stack trace.
+    Console.WriteLine($"error: {ex.Message}");
+    if (ex is FileNotFoundException or DirectoryNotFoundException)
+        Console.WriteLine("hint: run `dotnet run -- keygen` first or check Config/settings.local.json");
+    Environment.ExitCode = 1;
 }
 
 // --- keygen: produce agent + human key pairs (no network needed) ---
@@ -122,7 +131,7 @@ async Task SetupKeys()
 {
     var cfg = Config();
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
-    var humanPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim());
+    var humanPk = HumanPk(cfg);
 
     var wasmPath = cfg["KeyManagerWasmPath"]
         ?? "../../contracts/key-manager-session/target/wasm32-unknown-unknown/release/key_manager.wasm";
@@ -242,7 +251,7 @@ async Task CosignOp()
 {
     var cfg = Config();
     var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
-    var accountPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim());
+    var accountPk = AgentPk(cfg);
 
     var wasmPath = cfg["CosignWasmPath"]
         ?? "../../contracts/cosign-proof-session/target/wasm32-unknown-unknown/release/cosign_proof.wasm";
@@ -293,7 +302,20 @@ async Task CosignOp()
 }
 
 // --- helpers ---
-string AgentHex(IConfiguration cfg) => File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim();
+// Identities derive from the configured secret PEMs when present, so the secret/public
+// keys can never diverge — but the HUMAN/owner identity must also work from the public
+// hex file alone: the owner's secret normally lives in their wallet, not on this machine
+// (vault-init, cosign-prepare and account-hash only need the PUBLIC key).
+PublicKey AgentPk(IConfiguration cfg) => PkFrom(cfg["AgentSecretKeyPath"]!, "secrets/agent/public_key_hex", "agent");
+PublicKey HumanPk(IConfiguration cfg) => PkFrom(cfg["HumanSecretKeyPath"]!, "secrets/human/public_key_hex", "human");
+string AgentHex(IConfiguration cfg) => AgentPk(cfg).ToAccountHex();
+
+PublicKey PkFrom(string pemPath, string hexPath, string who)
+{
+    if (File.Exists(pemPath)) return KeyPair.FromPem(pemPath).PublicKey;
+    if (File.Exists(hexPath)) return PublicKey.FromHexString(File.ReadAllText(hexPath).Trim());
+    throw new FileNotFoundException($"no {who} key found — run `dotnet run -- keygen` first (looked for {pemPath} and {hexPath})");
+}
 
 async Task<(string motes, int dep, int km, string hash)> AccountState(HttpClient http, string restBase, string pubKeyHex)
 {
@@ -310,12 +332,9 @@ async Task<(string motes, int dep, int km, string hash)> AccountState(HttpClient
 // Print the agent + human account hashes (used as the vault agent/owner addresses).
 void AccountHashes()
 {
-    foreach (var name in new[] { "agent", "human" })
-    {
-        var hex = File.ReadAllText(Path.Combine("secrets", name, "public_key_hex")).Trim();
-        var pk = PublicKey.FromHexString(hex);
+    var cfg = Config();
+    foreach (var (name, pk) in new[] { ("agent", AgentPk(cfg)), ("human", HumanPk(cfg)) })
         Console.WriteLine($"{name,-6} {pk.GetAccountHash()}");
-    }
 }
 
 // Initialize the deployed GovernedVault (agent/owner/value_cap) by package hash.
@@ -327,7 +346,7 @@ async Task VaultInit()
     var pkg = args[1].Replace("hash-", "");
     var capMotes = args.Length > 2 ? ulong.Parse(args[2]) : 600_000_000_000UL; // 600 CSPR per-action cap
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
-    var humanPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim());
+    var humanPk = HumanPk(cfg);
 
     var tx = new Transaction.ContractCallBuilder()
         .ByPackageHash(pkg, null, null)
@@ -372,7 +391,7 @@ async Task VaultInit()
 async Task VaultFind()
 {
     var cfg = Config();
-    var agentPk = PublicKey.FromHexString(File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim());
+    var agentPk = AgentPk(cfg);
     var res = (await Rpc(cfg).GetAccountInfo(agentPk, (string?)null)).Parse();
     foreach (var nk in res.Account.NamedKeys)
         Console.WriteLine($"{nk.Name} = {nk.Key}");
@@ -438,13 +457,14 @@ async Task VaultDeploy()
 }
 
 // Call tighten_cap on the deployed GovernedVault (agent-authorized, emits CapTightened).
-// usage: vault-tighten <contract-hash> [newCapMotes]
+// new_cap is REQUIRED — no default; tightening is a destructive change to the live cap.
+// usage: vault-tighten <package-hash> <newCapMotes>
 async Task VaultTighten()
 {
     var cfg = Config();
-    if (args.Length < 2) { Console.WriteLine("usage: vault-tighten <contract-hash> [newCapMotes]"); return; }
+    if (args.Length < 3) { Console.WriteLine("usage: vault-tighten <package-hash> <newCapMotes>"); return; }
     var pkg = args[1].Replace("hash-", "");
-    var newCap = args.Length > 2 ? ulong.Parse(args[2]) : 1_000_000_000UL;
+    var newCap = ulong.Parse(args[2]);
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
 
     var tx = new Transaction.ContractCallBuilder()
@@ -489,11 +509,12 @@ async Task VaultTighten()
 
 // Read the vault's full state from chain with ZERO gas — Odra stores each field in a
 // "state" dictionary keyed by blake2b(index_bytes ++ mapping_data); a top-level field at
-// declaration index i uses index_bytes = [0,0,0,i]. usage: vault-state <package-hash>
+// declaration index i uses index_bytes = [0,0,0,i].
+// usage: vault-state <package-hash> [validatorHex ...]
 async Task VaultState()
 {
     var cfg = Config();
-    if (args.Length < 2) { Console.WriteLine("usage: vault-state <package-hash>"); return; }
+    if (args.Length < 2) { Console.WriteLine("usage: vault-state <package-hash> [validatorHex ...]"); return; }
     var pkg = args[1].Replace("hash-", "");
     using var http = AuthedHttp(cfg);
     var node = cfg["NodeRpcUrl"]!;
@@ -507,7 +528,11 @@ async Task VaultState()
             throw new Exception($"RPC {method}: HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} — {text.Trim()}");
         var doc = JsonDocument.Parse(text);
         if (doc.RootElement.TryGetProperty("error", out var err))
-            throw new Exception($"RPC {method}: {err.GetProperty("message").GetString()}");
+        {
+            var msg = err.GetProperty("message").GetString();
+            if (err.TryGetProperty("data", out var data)) msg += $" — {data.GetRawText()}"; // e.g. "ValueNotFound: …"
+            throw new Exception($"RPC {method}: {msg}");
+        }
         return doc.RootElement.GetProperty("result").Clone();
     }
     async Task<JsonElement> Query(string key) =>
@@ -543,18 +568,35 @@ async Task VaultState()
     {
         var input = mapKey is null ? IndexBytes(index) : IndexBytes(index).Concat(mapKey).ToArray();
         var itemKey = Blake2bHex(input);
+        JsonElement r;
         try
         {
-            var r = await Rpc("state_get_dictionary_item", new
+            r = await Rpc("state_get_dictionary_item", new
             {
                 state_root_hash = srh,
                 dictionary_identifier = new { URef = new { seed_uref = stateUref, dictionary_item_key = itemKey } }
             });
-            var parsed = r.GetProperty("stored_value").GetProperty("CLValue").GetProperty("parsed");
-            if (parsed.ValueKind != JsonValueKind.Array) return null;
-            return parsed.EnumerateArray().Select(e => e.GetByte()).ToArray();
         }
-        catch { return null; } // unset field
+        // ONLY the node's "value not found" means an unset field (renders as 0/false).
+        // Anything else (HTTP 429, transport, parse) propagates to Field() below so a
+        // rate-limited read never masquerades as an empty vault. The live node phrases it
+        // "Query failed — value was not found in the global state"; match the known variants.
+        catch (Exception ex) when (ex.Message.Contains("ValueNotFound", StringComparison.OrdinalIgnoreCase)
+                                || ex.Message.Contains("value not found", StringComparison.OrdinalIgnoreCase)
+                                || ex.Message.Contains("value was not found", StringComparison.OrdinalIgnoreCase)
+                                || ex.Message.Contains("failed to find", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        var parsed = r.GetProperty("stored_value").GetProperty("CLValue").GetProperty("parsed");
+        if (parsed.ValueKind != JsonValueKind.Array) return null;
+        return parsed.EnumerateArray().Select(e => e.GetByte()).ToArray();
+    }
+    // Print one field; an RPC failure surfaces loudly per field instead of a silent zero.
+    async Task Field(string label, Func<Task<string>> render)
+    {
+        try { Console.WriteLine($"{label}: {await render()}"); }
+        catch (Exception ex) { Console.WriteLine($"{label}: <read failed: {ex.Message}>"); }
     }
     async Task<string> Balance(string uref) =>
         (await Rpc("query_balance", new { purse_identifier = new { purse_uref = uref } })).GetProperty("balance").GetString()!;
@@ -572,18 +614,32 @@ async Task VaultState()
 
     Console.WriteLine($"--- GovernedVault {pkg[..12]}… (read from chain, no gas) ---");
     Console.WriteLine($"contract         : {contractHash[..12]}…");
-    var total = Motes(await Balance(mainPurse));
-    var bond = U512Cspr(await ReadBytes(4));
-    Console.WriteLine($"value_cap        : {U512Cspr(await ReadBytes(3)):N0} CSPR/action");
-    Console.WriteLine($"paused           : {Bool(await ReadBytes(11))}");
-    Console.WriteLine($"max_per_validator: {U512Cspr(await ReadBytes(12)):N0} CSPR (0 = unlimited)");
-    Console.WriteLine($"next_proposal_id : {U32(await ReadBytes(6))}");
-    Console.WriteLine($"violations       : {U32(await ReadBytes(5))}");
-    Console.WriteLine($"bond             : {bond:N0} CSPR");
-    Console.WriteLine($"total balance    : {total:N0} CSPR (liquid, incl. bond)");
-    Console.WriteLine($"free (withdrawable): {total - bond:N0} CSPR");
-    foreach (var v in new[] { "0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981", "017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e" })
-        Console.WriteLine($"committed[{v[..10]}…]: {U512Cspr(await ReadBytes(15, Convert.FromHexString(v))):N0} CSPR");
+    decimal? total = null, bond = null;
+    await Field("value_cap        ", async () => $"{U512Cspr(await ReadBytes(3)):N0} CSPR/action");
+    await Field("paused           ", async () => $"{Bool(await ReadBytes(11))}");
+    await Field("max_per_validator", async () => $"{U512Cspr(await ReadBytes(12)):N0} CSPR (0 = unlimited)");
+    await Field("next_proposal_id ", async () => $"{U32(await ReadBytes(6))}");
+    await Field("violations       ", async () => $"{U32(await ReadBytes(5))}");
+    await Field("bond             ", async () => { bond = U512Cspr(await ReadBytes(4)); return $"{bond:N0} CSPR"; });
+    await Field("total balance    ", async () => { total = Motes(await Balance(mainPurse)); return $"{total:N0} CSPR (liquid, incl. bond)"; });
+    Console.WriteLine(total is decimal t && bond is decimal b
+        ? $"free (withdrawable): {t - b:N0} CSPR"
+        : "free (withdrawable): <read failed: needs bond + total balance>");
+    // committed stake per validator: trailing CLI args > "Validators" in settings > demo pair
+    var validators = args.Skip(2).ToArray();
+    if (validators.Length == 0)
+        validators = cfg.GetSection("Validators").GetChildren().Select(c => c.Value!).ToArray();
+    if (validators.Length == 0)
+    {
+        Console.WriteLine("(demo default validators)");
+        validators = new[]
+        {
+            "0106618e1493f73ee0bc67ffbad4ba4e3863b995d61786d9b9a68ec7676f697981",
+            "017d96b9a63abcb61c870a4f55187a0a7ac24096bdb5fc585c12a686a4d892009e",
+        };
+    }
+    foreach (var v in validators)
+        await Field($"committed[{v[..10]}…]", async () => $"{U512Cspr(await ReadBytes(15, Convert.FromHexString(v))):N0} CSPR");
 }
 
 // Post the agent's slashable bond into the vault (payable proxy, like deposit_treasury).
@@ -930,17 +986,39 @@ async Task VaultApprove()
     await Submit(Rpc(cfg), tx, $"Owner co-signs material proposal #{id} → executes on-chain");
 }
 
-// Native CSPR transfer from the agent to another account (e.g. top up the human for gas).
-// usage: fund <agent|human|HEX> <motes>
+// Owner (human key, weight 3) REJECTS a pending material proposal WITHOUT executing it —
+// the cleanup path for bad or stale agent proposals.
+// usage: vault-reject <package-hash> <id>
+async Task VaultReject()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-reject <package-hash> <id>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var id = uint.Parse(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("reject_material")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) })
+        .From(humanKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1) // resolves only — no (un)delegation, no auction interaction
+        .Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner REJECTS material proposal #{id} → resolved without executing");
+}
+
+// Build the UNSIGNED approve_material(id) tx for the owner to sign in their OWN browser
+// wallet (CSPR.click / Casper Wallet) — printed wallet-shaped, nothing signed or submitted.
+// usage: cosign-prepare <package-hash> <id> [ownerPubkeyHex]
 async Task CosignPrepare()
 {
     var cfg = Config();
     if (args.Length < 3) { Console.WriteLine("usage: cosign-prepare <package-hash> <id> [ownerPubkeyHex]"); return; }
     var pkg = args[1].Replace("hash-", "");
     var id = uint.Parse(args[2]);
-    var ownerHex = args.Length > 3
-        ? args[3]
-        : File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim();
+    var ownerHex = args.Length > 3 ? args[3] : HumanPk(cfg).ToAccountHex();
     var owner = PublicKey.FromHexString(ownerHex);
 
     var tx = new Transaction.ContractCallBuilder()
@@ -952,20 +1030,26 @@ async Task CosignPrepare()
         .Payment(30_000_000_000UL, 1)
         .Build(); // NOT signed — the owner's wallet adds the signature in-browser
 
-    var json = JsonSerializer.Serialize(tx, new JsonSerializerOptions { WriteIndented = true });
-    Console.WriteLine($"--- unsigned approve_material(#{id}) for owner {ownerHex[..12]}… ---");
-    Console.WriteLine(json);
+    // The C# SDK serializes a Transaction as {"Deploy":null,"Version1":{…}}. Lift the
+    // Version1 node and wrap it the way the wallet SDKs consume it.
+    var root = JsonNode.Parse(JsonSerializer.Serialize(tx))!.AsObject();
+    var v1 = root["Version1"]!.DeepClone();
+    var wrapped = new JsonObject { ["transaction"] = new JsonObject { ["Version1"] = v1 } };
+    Console.WriteLine($"--- unsigned approve_material(#{id}) for owner {ownerHex[..12]}… (wallet-shaped) ---");
+    Console.WriteLine(wrapped.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     await Task.CompletedTask;
 }
 
+// Native CSPR transfer from the agent to another account (e.g. top up the human for gas).
+// usage: fund <agent|human|HEX> <motes>
 async Task Fund()
 {
     var cfg = Config();
     if (args.Length < 3) { Console.WriteLine("usage: fund <agent|human|HEX> <motes>"); return; }
     var targetHex = args[1] switch
     {
-        "agent" => File.ReadAllText(Path.Combine("secrets", "agent", "public_key_hex")).Trim(),
-        "human" => File.ReadAllText(Path.Combine("secrets", "human", "public_key_hex")).Trim(),
+        "agent" => AgentHex(cfg),
+        "human" => HumanPk(cfg).ToAccountHex(),
         var h => h,
     };
     var target = PublicKey.FromHexString(targetHex);
@@ -1017,8 +1101,47 @@ async Task Submit(NetCasperClient client, Transaction tx, string label)
 
 void Help()
 {
-    Console.WriteLine("CHAINLEASH spike harness — commands:");
-    Console.WriteLine("  keygen  smoke  balance  account-hash  setup-keys  attempt-overreach  cosign-op");
-    Console.WriteLine("  vault-deploy  vault-find  vault-init  vault-set-validator  vault-deposit  vault-delegate  vault-tighten  fund  help");
-    Console.WriteLine("Run:  dotnet run -- <command>");
+    void Line(string usage, string desc) => Console.WriteLine($"  {usage,-66} {desc}");
+    Console.WriteLine("CHAINLEASH spike harness — usage: dotnet run -- <command>");
+    Console.WriteLine();
+    Console.WriteLine("key setup:");
+    Line("keygen", "Generate agent + human ED25519 key pairs into secrets/");
+    Line("account-hash", "Print the agent + human account hashes (vault agent/owner addresses)");
+    Line("fund <agent|human|HEX> <motes>", "Native CSPR transfer from the agent (e.g. top up the human for gas)");
+    Console.WriteLine();
+    Console.WriteLine("weighted-key spikes:");
+    Line("setup-keys", "[Spike A] add human key (w3) + raise key_management threshold to 3");
+    Line("attempt-overreach", "[Spike B] agent-only key_management op — capture what the network returns");
+    Line("cosign-op", "[Spike C] human/weighted co-sign success path");
+    Console.WriteLine();
+    Console.WriteLine("agent vault ops (signed by the agent key):");
+    Line("vault-deploy", "Install the GovernedVault wasm (TransactionV1 session, ~500 CSPR gas)");
+    Line("vault-init <package-hash> [capMotes]", "Initialize the deployed vault (agent/owner/value_cap)");
+    Line("vault-deposit <package-hash> <motes>", "Fund the vault's purse via the payable proxy");
+    Line("vault-bond <package-hash> <motes>", "Post the agent's slashable bond into the vault");
+    Line("vault-delegate <package-hash> <validatorHex> <motes>", "Delegate vault CSPR to an allowlisted validator (routine, ≤ cap)");
+    Line("vault-undelegate <package-hash> <validatorHex> <motes>", "Undelegate stake (unbonds back to the VAULT, not the agent)");
+    Line("vault-redelegate <package-hash> <fromHex> <toHex> <motes>", "Move stake between validators in a single native tx");
+    Line("vault-propose <package-hash> <validatorHex> <motes> [undelegate]", "Propose an over-cap (material) move → awaits owner co-sign");
+    Line("vault-tighten <package-hash> <newCapMotes>", "Lower the per-action cap (agent may only tighten)");
+    Console.WriteLine();
+    Console.WriteLine("owner vault ops (signed by the human key):");
+    Line("vault-set-validator <package-hash> <validatorHex> [true|false]", "Allowlist (or de-list) a validator");
+    Line("vault-approve <package-hash> <id>", "Co-sign a pending material proposal → executes on-chain");
+    Line("vault-reject <package-hash> <id>", "Reject a pending material proposal WITHOUT executing it");
+    Line("vault-slash <pkg> <motes> <reason>", "Slash (forfeit) part of the agent's bond on a violation");
+    Line("vault-return-bond <pkg>", "Return the remaining bond to the operator");
+    Line("vault-pause <package-hash> <true|false>", "Kill-switch — pause/unpause all agent moves");
+    Line("vault-set-maxval <package-hash> <motes>", "Set the per-validator stake ceiling (0 = unlimited)");
+    Line("vault-set-interval <package-hash> <ms>", "Set the agent action cooldown in ms (0 = disabled)");
+    Line("vault-set-agent <pkg> <newAgentHex>", "Rotate the agent key");
+    Line("vault-transfer-owner <pkg> <newOwnerHex>", "Transfer ownership");
+    Console.WriteLine();
+    Console.WriteLine("read-only (nothing signed or submitted):");
+    Line("smoke", "Verify node RPC + config (prints node API/build version)");
+    Line("balance", "Agent account balance + thresholds (via CSPR.cloud REST)");
+    Line("vault-find", "Print the agent's named keys (find the vault package hash)");
+    Line("vault-state <package-hash> [validatorHex ...]", "Read the vault's full state from chain (zero gas)");
+    Line("cosign-prepare <package-hash> <id> [ownerPubkeyHex]", "Build the UNSIGNED wallet-shaped approve_material tx");
+    Line("help", "Show this help");
 }
