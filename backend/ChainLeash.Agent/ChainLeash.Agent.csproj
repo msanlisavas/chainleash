@@ -10,4 +10,12 @@
   <ItemGroup>
     <PackageReference Include="Casper.Network.SDK" Version="3.2.0" />
   </ItemGroup>
+
+  <!-- appsettings.local.json holds gitignored run secrets (CSPR.cloud key). Keep it out of
+       Release publish output so it can never be baked into an image; `dotnet run` (Debug)
+       still reads it from the project dir at runtime (Program.cs AddJsonFile, optional). -->
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <Content Remove="appsettings.local.json" />
+    <None Include="appsettings.local.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+  </ItemGroup>
 </Project>

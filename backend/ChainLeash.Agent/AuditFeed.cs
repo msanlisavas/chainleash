@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.SignalR;
 namespace ChainLeash.Agent;
 
 /// One entry in the agent's on-chain audit trail, streamed live to the dashboard.
+/// `Time` is the legacy UTC HH:mm:ss display string; `Iso` is the full ISO-8601 UTC
+/// timestamp so clients can render local time (older persisted events lack it).
 public sealed record AuditEvent(
     string Time,
     int Tick,
@@ -12,9 +14,13 @@ public sealed record AuditEvent(
     string? Validator = null,
     decimal? AmountCspr = null,
     string? TxHash = null,
-    bool? Success = null)
+    bool? Success = null,
+    string? Iso = null)
 {
-    public string? TxUrl => TxHash is null ? null : $"https://testnet.cspr.live/transaction/{TxHash}";
+    /// Block-explorer base for tx links — set once at startup from Casper:ExplorerBaseUrl.
+    public static string ExplorerBase { get; set; } = "https://testnet.cspr.live";
+
+    public string? TxUrl => TxHash is null ? null : $"{ExplorerBase}/transaction/{TxHash}";
 }
 
 /// A validator as the agent currently sees it (live CSPR.cloud metric + policy verdict).
@@ -63,9 +69,13 @@ public sealed class AuditFeed
 
     public FeedState State { get; } = new();
 
-    public AuditFeed(IHubContext<AuditHub> hub, IConfiguration cfg)
+    private readonly ILogger<AuditFeed> _log;
+    private bool _saveFailureWarned;
+
+    public AuditFeed(IHubContext<AuditHub> hub, IConfiguration cfg, ILogger<AuditFeed> log)
     {
         _hub = hub;
+        _log = log;
         var configured = cfg["Agent:DataPath"];
         _path = string.IsNullOrWhiteSpace(configured) ? Path.Combine("data", "feed.json") : configured;
         Load();
@@ -118,6 +128,8 @@ public sealed class AuditFeed
         }
     }
 
+    private readonly object _ioLock = new();
+
     private void Save()
     {
         if (_path is null) return;
@@ -125,16 +137,30 @@ public sealed class AuditFeed
         {
             List<AuditEvent> snapshot;
             lock (_lock) snapshot = _events.ToList();
-            var dir = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(new FeedSnapshot(snapshot, State.X402SpentCspr));
-            // Atomic: write a temp file then swap it in (keeping a .bak), so a crash mid-write
-            // never leaves the live snapshot truncated.
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
-            else File.Move(tmp, _path);
+            // Serialized + atomic: one writer at a time (the worker and the co-sign HTTP
+            // threads both push), and a temp-write + swap (keeping a .bak) so a crash
+            // mid-write never leaves the live snapshot truncated.
+            lock (_ioLock)
+            {
+                var dir = Path.GetDirectoryName(_path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                var tmp = _path + ".tmp";
+                File.WriteAllText(tmp, json);
+                if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
+                else File.Move(tmp, _path);
+            }
         }
-        catch { /* best-effort persistence — never break the live feed on an I/O hiccup */ }
+        catch (Exception ex)
+        {
+            // Best-effort persistence — never break the live feed on an I/O hiccup. But a
+            // PERSISTENT failure (e.g. a root-owned /data volume after the non-root image
+            // upgrade) must be loud once, or the audit trail dies silently.
+            if (!_saveFailureWarned)
+            {
+                _saveFailureWarned = true;
+                _log.LogWarning(ex, "audit feed persistence failed — events stream live but will NOT survive a restart (check {Path} permissions; on Docker upgrades see the RUNBOOK note about the chainleash-data volume)", _path);
+            }
+        }
     }
 }

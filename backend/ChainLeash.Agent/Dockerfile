@@ -20,11 +20,21 @@ RUN dotnet restore backend/ChainLeash.Agent/ChainLeash.Agent.csproj
 COPY backend/ChainLeash.Agent/ backend/ChainLeash.Agent/
 RUN dotnet publish backend/ChainLeash.Agent/ChainLeash.Agent.csproj -c Release -o /app/publish
 
-# 3) Runtime image: published app + the built dashboard.
+# 3) Runtime image: published app + the built dashboard. Runs as the non-root `app`
+#    user the aspnet image ships; curl is only there for the container HEALTHCHECK.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/* \
+ # the agent persists its audit feed under /data (compose named volume) — must be app-writable
+ && mkdir -p /data && chown app:app /data
 COPY --from=build /app/publish ./
 COPY --from=dashboard /src/backend/ChainLeash.Agent/wwwroot ./wwwroot
 ENV ASPNETCORE_URLS=http://+:5179
 EXPOSE 5179
+USER app
+# 503 = chain unreachable but the process is alive — don't flap the container on RPC hiccups
+HEALTHCHECK --interval=30s --start-period=20s \
+  CMD curl -s -o /dev/null -w "%{http_code}" http://localhost:5179/health | grep -qE "200|503"
 ENTRYPOINT ["dotnet", "ChainLeash.Agent.dll"]

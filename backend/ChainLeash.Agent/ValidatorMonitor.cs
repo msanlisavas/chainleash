@@ -63,27 +63,46 @@ public sealed class ValidatorMonitor
     private async Task<Dictionary<string, Metric>> FetchEraValidators(CancellationToken ct)
     {
         var era = await CurrentEra(ct);
-        var json = await _http.GetStringAsync($"validators?era_id={era}&page_size=100", ct);
-        using var doc = JsonDocument.Parse(json);
         var map = new Dictionary<string, Metric>(StringComparer.OrdinalIgnoreCase);
-        foreach (var v in doc.RootElement.GetProperty("data").EnumerateArray())
+        // Paginate: the era set can exceed one page, and a missed page would misclassify a
+        // healthy allowlisted validator as "not in current era set" — and actively exit it.
+        for (var page = 1; page <= 10; page++)
         {
-            var pk = v.GetProperty("public_key").GetString()!.ToLowerInvariant();
-            var fee = v.TryGetProperty("fee", out var f) && f.ValueKind == JsonValueKind.Number ? f.GetInt32() : 0;
-            var active = v.TryGetProperty("is_active", out var a) && a.ValueKind == JsonValueKind.True;
-            var stake = 0m;
-            if (v.TryGetProperty("total_stake", out var s) && s.ValueKind == JsonValueKind.String
-                && decimal.TryParse(s.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var motes))
-                stake = motes / 1_000_000_000m;
-            map[pk] = new Metric(fee, active, stake);
+            using var doc = await GetJson($"validators?era_id={era}&page={page}&page_size=100", ct);
+            foreach (var v in doc.RootElement.GetProperty("data").EnumerateArray())
+            {
+                var pk = v.GetProperty("public_key").GetString()!.ToLowerInvariant();
+                var fee = v.TryGetProperty("fee", out var f) && f.ValueKind == JsonValueKind.Number ? f.GetInt32() : 0;
+                var active = v.TryGetProperty("is_active", out var a) && a.ValueKind == JsonValueKind.True;
+                var stake = 0m;
+                if (v.TryGetProperty("total_stake", out var s) && s.ValueKind == JsonValueKind.String
+                    && decimal.TryParse(s.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var motes))
+                    stake = motes / 1_000_000_000m;
+                map[pk] = new Metric(fee, active, stake);
+            }
+            var pageCount = doc.RootElement.TryGetProperty("page_count", out var pc) && pc.ValueKind == JsonValueKind.Number
+                ? pc.GetInt32() : 1;
+            if (page >= pageCount) break;
         }
         return map;
     }
 
     private async Task<long> CurrentEra(CancellationToken ct)
     {
-        var json = await _http.GetStringAsync("auction-metrics", ct);
-        using var doc = JsonDocument.Parse(json);
+        using var doc = await GetJson("auction-metrics", ct);
         return doc.RootElement.GetProperty("data").GetProperty("current_era_id").GetInt64();
+    }
+
+    /// CSPR.cloud REST fetch with the failure CLASS made readable: a 429/quota response
+    /// arrives as a non-JSON body, and "'d' is an invalid start of a value" in the audit
+    /// feed helps nobody — name the real condition instead.
+    private async Task<JsonDocument> GetJson(string path, CancellationToken ct)
+    {
+        using var resp = await _http.GetAsync(path, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"CSPR.cloud {path}: HTTP {(int)resp.StatusCode} (rate limit / quota?)");
+        try { return JsonDocument.Parse(body); }
+        catch (JsonException) { throw new HttpRequestException($"CSPR.cloud {path}: non-JSON response (rate limit / quota?)"); }
     }
 }

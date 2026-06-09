@@ -48,42 +48,42 @@ public sealed class CasperVault
 
     /// Routine autonomous delegation (≤ cap, validator must be allowlisted).
     /// The chain reverts with OverCap/ValidatorNotAllowed if the leash is exceeded.
-    public Task<TxResult> Delegate(PublicKey validator, ulong amountMotes) =>
+    public Task<TxResult> Delegate(PublicKey validator, ulong amountMotes, CancellationToken ct = default) =>
         Call("delegate", new List<NamedArg>
         {
             new NamedArg("validator", CLValue.PublicKey(validator)),
             new NamedArg("amount", CLValue.U512(amountMotes)),
-        }, paymentMotes: 30_000_000_000UL);
+        }, paymentMotes: 30_000_000_000UL, ct);
 
     /// Routine autonomous undelegation (≤ cap). Funds unbond back to the VAULT,
     /// never to the agent — the agent can rebalance but can't drain.
-    public Task<TxResult> Undelegate(PublicKey validator, ulong amountMotes) =>
+    public Task<TxResult> Undelegate(PublicKey validator, ulong amountMotes, CancellationToken ct = default) =>
         Call("undelegate", new List<NamedArg>
         {
             new NamedArg("validator", CLValue.PublicKey(validator)),
             new NamedArg("amount", CLValue.U512(amountMotes)),
-        }, paymentMotes: 30_000_000_000UL);
+        }, paymentMotes: 30_000_000_000UL, ct);
 
     /// Routine autonomous redelegation — move stake from one validator to another in a
     /// single native tx (≤ cap, destination allowlisted). The cleanest "switch to a
     /// better validator" move: no manual unstake/restake, destination committed on-chain.
-    public Task<TxResult> Redelegate(PublicKey from, PublicKey to, ulong amountMotes) =>
+    public Task<TxResult> Redelegate(PublicKey from, PublicKey to, ulong amountMotes, CancellationToken ct = default) =>
         Call("redelegate", new List<NamedArg>
         {
             new NamedArg("validator", CLValue.PublicKey(from)),
             new NamedArg("new_validator", CLValue.PublicKey(to)),
             new NamedArg("amount", CLValue.U512(amountMotes)),
-        }, paymentMotes: 30_000_000_000UL);
+        }, paymentMotes: 30_000_000_000UL, ct);
 
     /// Agent proposes an over-cap (material) (un)delegation — emits MaterialProposed
     /// on-chain and waits for the human owner to co-sign approve_material.
-    public Task<TxResult> ProposeMaterial(PublicKey validator, ulong amountMotes, bool undelegate) =>
+    public Task<TxResult> ProposeMaterial(PublicKey validator, ulong amountMotes, bool undelegate, CancellationToken ct = default) =>
         Call("propose_material", new List<NamedArg>
         {
             new NamedArg("validator", CLValue.PublicKey(validator)),
             new NamedArg("amount", CLValue.U512(amountMotes)),
             new NamedArg("undelegate", CLValue.Bool(undelegate)),
-        });
+        }, ct: ct);
 
     /// Post the agent's slashable bond into the vault (payable, via Odra's proxy_caller
     /// session — same mechanism as treasury deposits). Skin in the game, on-chain.
@@ -106,15 +106,8 @@ public sealed class CasperVault
             .From(_agentKp.PublicKey).Wasm(proxy).RuntimeArgs(rargs)
             .ChainName(_cfg["Casper:ChainName"]!).Payment(20_000_000_000UL, 1).Build();
         tx.Sign(_agentKp);
-        var client = Rpc();
-        await client.PutTransaction(tx);
-        for (var i = 0; i < 24; i++)
-        {
-            await Task.Delay(5000);
-            var er = (await client.GetTransaction(tx.Hash, CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
-            if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
-        }
-        return new TxResult(tx.Hash, false, "timeout");
+        await Rpc().PutTransaction(tx);
+        return await AwaitExecution(tx.Hash);
     }
 
     /// Overseer tightens (only lowers) the cap — emits CapTightened.
@@ -140,15 +133,8 @@ public sealed class CasperVault
             .Build();
         tx.Sign(humanKp);
 
-        var client = Rpc();
-        await client.PutTransaction(tx);
-        for (var i = 0; i < 24; i++)
-        {
-            await Task.Delay(5000);
-            var er = (await client.GetTransaction(tx.Hash, CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
-            if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
-        }
-        return new TxResult(tx.Hash, false, "timeout");
+        await Rpc().PutTransaction(tx);
+        return await AwaitExecution(tx.Hash);
     }
 
     /// Build the UNSIGNED approve_material(id) transaction for the owner to sign in their
@@ -182,24 +168,30 @@ public sealed class CasperVault
     /// random successful tx hash can't forge a "co-signed" audit entry. Because
     /// approve_material is owner-gated in the contract, a SUCCESSFUL one proves the owner
     /// signed it; the server never needs to (and can't) hold the owner key.
-    public async Task<TxResult> ConfirmCoSign(uint id, string txHash)
+    public async Task<TxResult> ConfirmCoSign(uint id, string txHash, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(txHash)) return new TxResult("", false, "missing txHash");
         var client = Rpc();
-        for (var i = 0; i < 24; i++)
+        try
         {
-            try
+            for (var i = 0; i < 24; i++)
             {
-                var parsed = (await client.GetTransaction(txHash, CancellationToken.None)).Parse();
-                var er = parsed.ExecutionInfo?.ExecutionResult;
-                if (er is null) { await Task.Delay(5000); continue; }
-                if (!er.IsSuccess) return new TxResult(txHash, false, er.ErrorMessage);
-                var why = VerifyApproveMaterial(parsed.Transaction, id);
-                return why is null ? new TxResult(txHash, true, null) : new TxResult(txHash, false, why);
+                try
+                {
+                    var parsed = (await client.GetTransaction(txHash, ct)).Parse();
+                    var er = parsed.ExecutionInfo?.ExecutionResult;
+                    if (er is null) { await Task.Delay(5000, ct); continue; }
+                    if (!er.IsSuccess) return new TxResult(txHash, false, OdraErrors.Humanize(er.ErrorMessage));
+                    var why = VerifyApproveMaterial(parsed.Transaction, id);
+                    return why is null ? new TxResult(txHash, true, null) : new TxResult(txHash, false, why);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* not yet visible to this node — keep polling */ }
+                await Task.Delay(5000, ct);
             }
-            catch { /* not yet visible to this node — keep polling */ }
-            await Task.Delay(5000);
         }
+        // The caller went away (browser closed) — stop burning upstream RPCs on its behalf.
+        catch (OperationCanceledException) { return new TxResult(txHash, false, "cancelled: client disconnected (timeout)"); }
         return new TxResult(txHash, false, "timeout waiting for on-chain confirmation");
     }
 
@@ -213,7 +205,7 @@ public sealed class CasperVault
         return CoSignVerifier.Verify(root, _pkg, id, _ownerKey?.ToAccountHex(), _ownerKey?.GetAccountHash());
     }
 
-    private async Task<TxResult> Call(string entryPoint, List<NamedArg> args, ulong paymentMotes = 5_000_000_000UL)
+    private async Task<TxResult> Call(string entryPoint, List<NamedArg> args, ulong paymentMotes = 5_000_000_000UL, CancellationToken ct = default)
     {
         if (_agentKp is null) return new TxResult("", false, "read-only: no agent key configured (observer mode)");
         var tx = new Transaction.ContractCallBuilder()
@@ -226,15 +218,33 @@ public sealed class CasperVault
             .Build();
         tx.Sign(_agentKp);
 
-        var client = Rpc();
-        await client.PutTransaction(tx);
-        for (var i = 0; i < 24; i++)
+        await Rpc().PutTransaction(tx);
+        return await AwaitExecution(tx.Hash, ct);
+    }
+
+    /// Poll until the submitted tx executes. A transient GetTransaction failure (node lag,
+    /// a 429 on the shared CSPR.cloud key) must NOT abandon a tx that was already put on
+    /// chain — the caller would wrongly retry and duplicate the action — so errors inside
+    /// the loop are tolerated until the 2-minute budget runs out. Honors cancellation so
+    /// host shutdown isn't held hostage by a poll.
+    private async Task<TxResult> AwaitExecution(string hash, CancellationToken ct = default)
+    {
+        try
         {
-            await Task.Delay(5000);
-            var er = (await client.GetTransaction(tx.Hash, CancellationToken.None)).Parse().ExecutionInfo?.ExecutionResult;
-            if (er is not null) return new TxResult(tx.Hash, er.IsSuccess, er.IsSuccess ? null : er.ErrorMessage);
+            for (var i = 0; i < 24; i++)
+            {
+                await Task.Delay(5000, ct);
+                try
+                {
+                    var er = (await Rpc().GetTransaction(hash, ct)).Parse().ExecutionInfo?.ExecutionResult;
+                    if (er is not null) return new TxResult(hash, er.IsSuccess, er.IsSuccess ? null : OdraErrors.Humanize(er.ErrorMessage));
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* transient — keep polling */ }
+            }
         }
-        return new TxResult(tx.Hash, false, "timeout");
+        catch (OperationCanceledException) { return new TxResult(hash, false, "cancelled while awaiting confirmation"); }
+        return new TxResult(hash, false, "timeout awaiting on-chain confirmation");
     }
 
     private NetCasperClient? _rpc;
@@ -252,5 +262,5 @@ public sealed class CasperVault
 
 public readonly record struct TxResult(string Hash, bool Success, string? Error)
 {
-    public string Url => $"https://testnet.cspr.live/transaction/{Hash}";
+    public string Url => $"{AuditEvent.ExplorerBase}/transaction/{Hash}";
 }

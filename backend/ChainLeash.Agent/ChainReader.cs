@@ -4,16 +4,27 @@ using Org.BouncyCastle.Crypto.Digests;
 
 namespace ChainLeash.Agent;
 
+/// An RPC failure with its error CLASS preserved. `NotFound` (a dictionary key that was
+/// never written) is the ONLY class callers may treat as "field unset" — everything else
+/// (HTTP 429 on the shared CSPR.cloud key, transport faults, non-JSON bodies) must
+/// surface, or the agent would act on a fabricated leash state (kill-switch silently
+/// reading as off, cap reading as 0).
+public sealed class ChainRpcException(string method, string detail, bool notFound = false)
+    : Exception($"RPC {method}: {detail}")
+{
+    public bool NotFound { get; } = notFound;
+}
+
 /// Reads the GovernedVault's live state directly from chain with ZERO gas. Odra stores
 /// each field in a "state" dictionary keyed by blake2b(index_bytes ++ mapping_data); a
 /// top-level field at declaration index i (1-based) uses index_bytes [0,0,0,i], and the
-/// stored value is the field's raw bytesrepr (U512 = [len][LE]; u32 = 4 LE; bool = 1 byte).
+/// stored value is the field's raw bytesrepr (see OdraBytes).
 /// This lets the agent + dashboard operate on chain-truth instead of config seeds.
 public sealed class ChainReader
 {
-    private readonly IConfiguration _cfg;
     private readonly string _node;
     private readonly string _pkg;
+    private readonly HttpClient _http; // one shared client — a fresh one per RPC churns sockets in a 24/7 daemon
     private string? _stateUref;
     private string? _mainPurse;
     private string? _srh;
@@ -21,32 +32,42 @@ public sealed class ChainReader
 
     // GovernedVault field indices (declaration order, 1-based — Odra reserves index 0).
     private const byte IxValueCap = 3, IxBond = 4, IxViolations = 5, IxNextId = 6,
-                       IxPaused = 11, IxMaxPerValidator = 12, IxCommitted = 15;
+                       IxProposals = 8,
+                       IxPaused = 11, IxMaxPerValidator = 12, IxMinActionInterval = 13,
+                       IxLastActionTime = 14, IxCommitted = 15;
 
     public ChainReader(IConfiguration cfg)
     {
-        _cfg = cfg;
         _node = cfg["Casper:NodeRpcUrl"]!;
         _pkg = cfg["Casper:GovernedVaultPackageHash"]!.Replace("hash-", "");
-    }
-
-    private HttpClient Http()
-    {
-        var h = new HttpClient();
-        var key = _cfg["Casper:CsprCloudAccessKey"];
-        if (!string.IsNullOrWhiteSpace(key)) h.DefaultRequestHeaders.Add("Authorization", key);
-        return h;
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        var key = cfg["Casper:CsprCloudAccessKey"];
+        if (!string.IsNullOrWhiteSpace(key)) _http.DefaultRequestHeaders.Add("Authorization", key);
     }
 
     private async Task<JsonElement> Rpc(string method, object prms)
     {
-        using var http = Http();
         var body = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method, @params = prms });
-        var resp = await http.PostAsync(_node, new StringContent(body, Encoding.UTF8, "application/json"));
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        if (doc.RootElement.TryGetProperty("error", out var err))
-            throw new Exception($"RPC {method}: {err.GetProperty("message").GetString()}");
-        return doc.RootElement.GetProperty("result").Clone();
+        using var resp = await _http.PostAsync(_node, new StringContent(body, Encoding.UTF8, "application/json"));
+        var text = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode) // CSPR.cloud 429s arrive as non-JSON error pages
+            throw new ChainRpcException(method, $"HTTP {(int)resp.StatusCode}");
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(text); }
+        catch (JsonException) { throw new ChainRpcException(method, "non-JSON RPC response"); }
+        using (doc)
+        {
+            if (doc.RootElement.TryGetProperty("error", out var err))
+            {
+                var msg = err.GetProperty("message").GetString() ?? "";
+                var code = err.TryGetProperty("code", out var c) ? c.GetInt32() : 0;
+                var notFound = msg.Contains("ValueNotFound", StringComparison.OrdinalIgnoreCase)
+                            || msg.Contains("value not found", StringComparison.OrdinalIgnoreCase)
+                            || msg.Contains("Failed to find", StringComparison.OrdinalIgnoreCase);
+                throw new ChainRpcException(method, $"{msg} ({code})", notFound);
+            }
+            return doc.RootElement.GetProperty("result").Clone();
+        }
     }
 
     private Task<JsonElement> Query(string key) =>
@@ -85,24 +106,30 @@ public sealed class ChainReader
         return _srh;
     }
 
+    /// Read a field's raw bytes. Returns null ONLY for a genuinely unset field (the node's
+    /// value-not-found class); every other failure throws (see ChainRpcException).
     private async Task<byte[]?> ReadBytes(byte index, byte[]? mapKey = null)
     {
         await EnsureResolved();
         var input = mapKey is null ? new byte[] { 0, 0, 0, index } : new byte[] { 0, 0, 0, index }.Concat(mapKey).ToArray();
+        var srh = await StateRootHash();
+        JsonElement r;
         try
         {
-            var srh = await StateRootHash();
-            var r = await Rpc("state_get_dictionary_item", new
+            r = await Rpc("state_get_dictionary_item", new
             {
                 state_root_hash = srh,
                 dictionary_identifier = new { URef = new { seed_uref = _stateUref, dictionary_item_key = Blake2bHex(input) } }
             });
-            var parsed = r.GetProperty("stored_value").GetProperty("CLValue").GetProperty("parsed");
-            if (parsed.ValueKind != JsonValueKind.Array) return null;
-            return parsed.EnumerateArray().Select(e => e.GetByte()).ToArray();
         }
-        catch { return null; } // unset field
+        catch (ChainRpcException ex) when (ex.NotFound) { return null; } // unset field
+        var parsed = r.GetProperty("stored_value").GetProperty("CLValue").GetProperty("parsed");
+        if (parsed.ValueKind != JsonValueKind.Array)
+            throw new ChainRpcException("state_get_dictionary_item", "unexpected stored-value shape");
+        return parsed.EnumerateArray().Select(e => e.GetByte()).ToArray();
     }
+
+    private static byte[] U32Le(uint v) => new[] { (byte)v, (byte)(v >> 8), (byte)(v >> 16), (byte)(v >> 24) };
 
     public async Task<decimal> ValueCapCspr() => OdraBytes.U512Cspr(await ReadBytes(IxValueCap));
     public async Task<decimal> BondCspr() => OdraBytes.U512Cspr(await ReadBytes(IxBond));
@@ -110,7 +137,41 @@ public sealed class ChainReader
     public async Task<bool> Paused() => OdraBytes.Bool(await ReadBytes(IxPaused));
     public async Task<uint> NextProposalId() => OdraBytes.U32(await ReadBytes(IxNextId));
     public async Task<uint> Violations() => OdraBytes.U32(await ReadBytes(IxViolations));
+    public async Task<ulong> ActionIntervalMs() => OdraBytes.U64(await ReadBytes(IxMinActionInterval));
+    public async Task<ulong> LastActionTimeMs() => OdraBytes.U64(await ReadBytes(IxLastActionTime));
     public async Task<decimal> CommittedCspr(string validatorHex) => OdraBytes.U512Cspr(await ReadBytes(IxCommitted, Convert.FromHexString(validatorHex)));
+
+    /// One on-chain proposal by id, or null if that id was never written.
+    public async Task<OdraBytes.ChainProposal?> ProposalById(uint id)
+    {
+        var b = await ReadBytes(IxProposals, U32Le(id));
+        return b is null ? null : OdraBytes.Proposal(b);
+    }
+
+    // Resolved proposals are immutable on-chain, so they're cached forever; only open
+    // (and brand-new) ids are re-read each tick.
+    private readonly Dictionary<uint, OdraBytes.ChainProposal> _resolvedCache = new();
+
+    /// The vault's proposals straight from chain, newest first — the dashboard's
+    /// co-sign queue is CHAIN truth, not in-memory bookkeeping (it survives restarts
+    /// and can't be forged by replaying old co-sign hashes). Reads at most the most
+    /// recent `window` ids to bound RPC fan-out on a long-lived vault.
+    public async Task<List<(uint Id, OdraBytes.ChainProposal Proposal)>> Proposals(uint window = 50)
+    {
+        var n = await NextProposalId();
+        var first = n > window ? n - window : 0;
+        var list = new List<(uint, OdraBytes.ChainProposal)>();
+        for (var id = first; id < n; id++)
+        {
+            if (_resolvedCache.TryGetValue(id, out var cached)) { list.Add((id, cached)); continue; }
+            var p = await ProposalById(id);
+            if (p is null) continue;
+            if (p.Resolved) _resolvedCache[id] = p;
+            list.Add((id, p));
+        }
+        list.Reverse();
+        return list;
+    }
 
     /// Total liquid CSPR in the vault purse (un-delegated; includes the bond).
     public async Task<decimal> TotalBalanceCspr()

@@ -14,9 +14,9 @@ public class CoSignVerifierTests
 
     // Build the C#-SDK Transaction serialization shape: {"Version1":{payload:{...}}}.
     static JsonObject Tx(string entryPoint = "approve_material", string? pkg = Pkg, string? idArg = "0",
-                         string? initiatorPk = Owner, string? initiatorAh = null)
+                         string? initiatorPk = Owner, string? initiatorAh = null, string? argsOverride = null)
     {
-        var args = idArg is null ? "[]" : $"[[\"id\",{{\"cl_type\":\"U32\",\"parsed\":{idArg}}}]]";
+        var args = argsOverride ?? (idArg is null ? "[]" : $"[[\"id\",{{\"cl_type\":\"U32\",\"parsed\":{idArg}}}]]");
         var initiator = initiatorAh is not null
             ? $"{{\"AccountHash\":\"account-hash-{initiatorAh}\"}}"
             : $"{{\"PublicKey\":\"{initiatorPk}\"}}";
@@ -65,4 +65,33 @@ public class CoSignVerifierTests
     [Fact]
     public void Malformed_tx_fails_closed() =>
         Assert.NotNull(CoSignVerifier.Verify(JsonNode.Parse("{\"nope\":1}")!.AsObject(), Pkg, 0, Owner, OwnerHash));
+
+    [Fact]
+    public void Duplicate_id_args_rejected()
+    {
+        // The Casper runtime reads the FIRST named arg; a last-wins parse would let
+        // [id=0, id=5] verify as 0 while the chain executes 5. Must reject outright.
+        var dup = "[[\"id\",{\"cl_type\":\"U32\",\"parsed\":0}],[\"id\",{\"cl_type\":\"U32\",\"parsed\":5}]]";
+        Assert.Contains("multiple id", CoSignVerifier.Verify(Tx(argsOverride: dup), Pkg, 0, Owner, OwnerHash)!);
+    }
+
+    [Fact]
+    public void Bare_version1_payload_accepted()
+    {
+        var bare = Tx()["Version1"]!.DeepClone().AsObject(); // some wallets return the node unwrapped
+        Assert.Null(CoSignVerifier.Verify(bare, Pkg, 0, Owner, OwnerHash));
+    }
+
+    [Fact]
+    public void Hash_prefixed_target_addr_normalized() =>
+        Assert.Null(CoSignVerifier.Verify(Tx(pkg: "hash-" + Pkg), Pkg, 0, Owner, OwnerHash));
+
+    [Fact]
+    public void Native_target_rejected() =>
+        Assert.Contains("different contract", CoSignVerifier.Verify(Tx(pkg: null), Pkg, 0, Owner, OwnerHash)!);
+
+    [Fact]
+    public void Non_numeric_id_fails_closed() =>
+        Assert.NotNull(CoSignVerifier.Verify(
+            Tx(argsOverride: "[[\"id\",{\"cl_type\":\"U32\",\"parsed\":\"zero\"}]]"), Pkg, 0, Owner, OwnerHash));
 }
