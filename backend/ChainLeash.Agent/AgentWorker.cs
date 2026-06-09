@@ -28,6 +28,9 @@ public sealed class AgentWorker : BackgroundService
 
     private int _tick, _actions, _buys;
     private bool _gasWarned;
+    private int _failStreak;      // consecutive failed on-chain actions → exponential backoff
+    private int _backoffUntilTick;
+    private string? _lastTickError; // edge-trigger the tick-error HOLD so an outage doesn't flood the feed
 
     public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators,
         ChainReader chain, IConfiguration cfg, IHostApplicationLifetime life, AuditFeed feed)
@@ -59,8 +62,24 @@ public sealed class AgentWorker : BackgroundService
         while (!ct.IsCancellationRequested)
         {
             _tick++;
-            try { await Tick(chunk, maxActions, maxBuys, ct); }
-            catch (Exception ex) { _log.LogError(ex, "tick {T} error", _tick); await Emit("HOLD", $"tick error: {ex.Message}"); }
+            try
+            {
+                await Tick(chunk, maxActions, maxBuys, ct);
+                _lastTickError = null;
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "tick {T} error", _tick);
+                // The strict ChainReader throws instead of fabricating defaults — so a
+                // failed tick means the dashboard's numbers are last-known, not live.
+                _feed.State.Stale = true;
+                if (ex.Message != _lastTickError) // edge-triggered: one HOLD per distinct failure
+                {
+                    _lastTickError = ex.Message;
+                    await Emit("HOLD", $"tick error: {ex.Message}");
+                }
+                await _feed.PushState();
+            }
 
             if (maxTicks > 0 && _tick >= maxTicks)
             {
@@ -90,7 +109,9 @@ public sealed class AgentWorker : BackgroundService
 
     private async Task Tick(decimal chunk, int maxActions, int maxBuys, CancellationToken ct)
     {
-        // 1) Read the vault's REAL state from chain (gas-free).
+        // 1) Read the vault's REAL state from chain (gas-free). A failed read THROWS
+        //    (ChainRpcException) — the agent must never act on fabricated defaults like
+        //    "kill-switch off" or "cap 0"; the loop's catch emits HOLD and flags Stale.
         var paused = await _chain.Paused();
         var cap = await _chain.ValueCapCspr();
         var free = await _chain.FreeBalanceCspr();
@@ -109,6 +130,24 @@ public sealed class AgentWorker : BackgroundService
             return;
         }
         if (assessments.Count == 0) { await Emit("HOLD", "No allowlisted validators configured."); return; }
+        if (_tick < _backoffUntilTick)
+        {
+            _log.LogInformation("tick {T}: backing off after {N} failed action(s) until tick {U}", _tick, _failStreak, _backoffUntilTick);
+            return; // backoff already announced via HOLD when it started
+        }
+        // Respect the vault's on-chain cooldown: don't sign a move the contract will
+        // certainly revert with RateLimited — a revert still burns real gas every tick.
+        var intervalMs = await _chain.ActionIntervalMs();
+        if (intervalMs > 0)
+        {
+            var lastMs = await _chain.LastActionTimeMs();
+            var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (lastMs != 0 && nowMs < lastMs + intervalMs)
+            {
+                _log.LogInformation("tick {T}: vault cooldown active ({Left}s left) → holding", _tick, (lastMs + intervalMs - nowMs) / 1000);
+                return;
+            }
+        }
 
         var breach = assessments.FirstOrDefault(a => !a.Compliant && committed.GetValueOrDefault(a.PublicKey) > 0);
         var best = assessments.FirstOrDefault(a => a.Compliant);
@@ -130,7 +169,7 @@ public sealed class AgentWorker : BackgroundService
             try
             {
                 _buys++;
-                var sig = await _x402.BuySignal(best.PublicKey); // risk read for the validator we're about to act on
+                var sig = await _x402.BuySignal(best.PublicKey, ct); // risk read for the validator we're about to act on
                 _feed.State.Buys = _buys;
                 _feed.State.X402SpentCspr += (decimal)sig.PaidMotes / 1_000_000_000m;
                 var hash = string.IsNullOrEmpty(sig.SettlementHash) ? null : sig.SettlementHash;
@@ -138,16 +177,38 @@ public sealed class AgentWorker : BackgroundService
                     amountCspr: (decimal)sig.PaidMotes / 1_000_000_000m, txHash: hash);
                 escalate = sig.Risk == "elevated";
             }
+            catch (X402StrandedPaymentException stranded)
+            {
+                // The CSPR is SPENT (settlement confirmed) even though no signal came back —
+                // record it so the books stay honest, and surface the redeemable proof.
+                _feed.State.Buys = _buys;
+                _feed.State.X402SpentCspr += (decimal)stranded.PaidMotes / 1_000_000_000m;
+                await Emit("PAY", $"Paid {stranded.PaidMotes / 1e9:F2} CSPR over x402 but no signal was served — proof {stranded.SettlementHash[..10]}… remains redeemable.",
+                    amountCspr: (decimal)stranded.PaidMotes / 1_000_000_000m, txHash: stranded.SettlementHash, success: false);
+                _log.LogWarning("x402 stranded payment: {Msg} — proceeding on free policy signal.", stranded.Message);
+            }
             catch (Exception ex) { _log.LogWarning("x402 read unavailable ({Msg}) — proceeding on free policy signal.", ex.Message); }
         }
 
-        if (hasBreach) await ExitBreach(breach, best, committed.GetValueOrDefault(breach.PublicKey!), cap);
-        else await Deploy(best, StakingPolicy.DeployAmount(free, chunk), cap, escalate);
+        if (hasBreach) await ExitBreach(breach, best, committed.GetValueOrDefault(breach.PublicKey!), cap, ct);
+        else await Deploy(best, StakingPolicy.DeployAmount(free, chunk), cap, escalate, ct);
+    }
+
+    /// Track action outcomes: success resets the failure streak; a failed (reverted or
+    /// unconfirmed) action backs the agent off exponentially — repeating a paid revert
+    /// every 20s tick burns gas for nothing and floods the audit trail.
+    private async Task TrackOutcome(TxResult r)
+    {
+        if (r.Success) { _failStreak = 0; return; }
+        _failStreak = Math.Min(_failStreak + 1, 8); // clamp: C# masks shift counts, and the display count should stay sane
+        var skip = 1 << Math.Min(_failStreak, 4);   // 2,4,8,16 ticks ≈ up to ~5 min at 20s
+        _backoffUntilTick = _tick + skip;
+        await Emit("HOLD", $"Backing off {skip} ticks after {_failStreak} failed action(s) — last error: {r.Error}");
     }
 
     /// A delegated validator broke policy → redelegate its stake to the best compliant
     /// validator (single native tx); undelegate to the vault if none is compliant.
-    private async Task ExitBreach(ValidatorMonitor.Assessment breach, ValidatorMonitor.Assessment best, decimal position, decimal cap)
+    private async Task ExitBreach(ValidatorMonitor.Assessment breach, ValidatorMonitor.Assessment best, decimal position, decimal cap, CancellationToken ct)
     {
         var amount = StakingPolicy.ExitAmount(position, cap);
         var from = PublicKey.FromHexString(breach.PublicKey);
@@ -156,50 +217,63 @@ public sealed class AgentWorker : BackgroundService
         if (StakingPolicy.MustEscalateExit(position, cap))
         {
             await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}); position {position} > cap → escalating exit.", validator: breach.PublicKey, amountCspr: position);
-            await Propose(from, position, undelegate: true, $"exit breaching validator (position {position} > cap {cap})");
+            await Propose(from, position, undelegate: true, $"exit breaching validator (position {position} > cap {cap})", ct);
             return;
         }
         if (hasDestination)
         {
             var bestPk = best.PublicKey!;
             await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — redelegating {amount} CSPR → {bestPk[..10]}… ({best.Note}).", validator: breach.PublicKey, amountCspr: amount);
-            var r = await _vault.Redelegate(from, PublicKey.FromHexString(bestPk), Motes(amount));
+            var r = await _vault.Redelegate(from, PublicKey.FromHexString(bestPk), Motes(amount), ct);
             await Audit("REDELEGATE", bestPk, amount, r);
             if (r.Success) _actions++;
+            await TrackOutcome(r);
             return;
         }
-        var u = await _vault.Undelegate(from, Motes(amount));
+        var u = await _vault.Undelegate(from, Motes(amount), ct);
         await Audit("UNDELEGATE", breach.PublicKey, amount, u);
         if (u.Success) _actions++;
+        await TrackOutcome(u);
     }
 
     /// Idle treasury + a compliant best validator → deploy a chunk into it (or escalate).
-    private async Task Deploy(ValidatorMonitor.Assessment best, decimal amount, decimal cap, bool escalate)
+    private async Task Deploy(ValidatorMonitor.Assessment best, decimal amount, decimal cap, bool escalate, CancellationToken ct)
     {
         var validator = PublicKey.FromHexString(best.PublicKey);
         if (StakingPolicy.RequiresProposal(amount, cap, escalate))
         {
-            await Propose(validator, amount, undelegate: false, amount > cap ? $"deploy {amount} > cap {cap}" : "elevated risk read → human co-sign");
+            await Propose(validator, amount, undelegate: false, amount > cap ? $"deploy {amount} > cap {cap}" : "elevated risk read → human co-sign", ct);
             return;
         }
         _log.LogInformation("tick {T}: deploying {Amt} CSPR to {V}… ({Note}) — routine, ≤ cap.", _tick, amount, best.PublicKey[..12], best.Note);
-        var r = await _vault.Delegate(validator, Motes(amount));
+        var r = await _vault.Delegate(validator, Motes(amount), ct);
         await Audit("DELEGATE", best.PublicKey, amount, r);
         if (r.Success) _actions++;
+        await TrackOutcome(r);
     }
 
-    private async Task Propose(PublicKey validator, decimal amount, bool undelegate, string why)
+    private async Task Propose(PublicKey validator, decimal amount, bool undelegate, string why, CancellationToken ct)
     {
         var vHex = validator.ToAccountHex();
         _log.LogInformation("tick {T}: MATERIAL move ({Why}) — proposing for human co-sign…", _tick, why);
-        var r = await _vault.ProposeMaterial(validator, Motes(amount), undelegate);
+        // Read the id BEFORE proposing: only this agent proposes to the vault, so the next
+        // id is the one this proposal will get (the post-hoc next-1 read raced the chain).
+        uint? id = null;
+        try { id = await _chain.NextProposalId(); } catch { /* fall back to the chain rebuild below */ }
+        var r = await _vault.ProposeMaterial(validator, Motes(amount), undelegate, ct);
         await Audit("PROPOSE", vHex, amount, r, extra: $" ({why}) — awaits human co-sign");
         if (r.Success)
         {
-            var id = await _chain.NextProposalId(); // chain-truth id (next-1 is the one just created)
-            _feed.State.Proposals.Insert(0, new ProposalView(id == 0 ? 0 : id - 1, vHex, amount, undelegate, r.Hash, false));
+            // Optimistic insert so the co-sign card appears immediately; the next tick's
+            // RefreshState rebuilds the whole list from chain truth regardless.
+            if (id is not null)
+                _feed.State.Proposals = _feed.State.Proposals
+                    .Where(p => p.Id != id.Value)
+                    .Prepend(new ProposalView(id.Value, vHex, amount, undelegate, r.Hash, false))
+                    .ToList();
             _actions++;
         }
+        await TrackOutcome(r);
     }
 
     private async Task Audit(string kind, string validator, decimal amountCspr, TxResult r, string? extra = null)
@@ -232,6 +306,13 @@ public sealed class AgentWorker : BackgroundService
             s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr();
             s.Violations = (int)await _chain.Violations();
             s.AgentGasCspr = _vault.AgentKey is null ? 0 : await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
+            // The co-sign queue is CHAIN truth — it survives restarts and can't be forged
+            // by replaying old co-sign hashes. Known propose-tx hashes are kept for links.
+            var known = s.Proposals.ToDictionary(p => p.Id, p => p.TxHash);
+            s.Proposals = (await _chain.Proposals())
+                .Select(cp => new ProposalView(cp.Id, cp.Proposal.ValidatorHex, cp.Proposal.AmountCspr,
+                    cp.Proposal.Undelegate, known.GetValueOrDefault(cp.Id, ""), cp.Proposal.Resolved))
+                .ToList();
             s.Stale = false;
         }
         catch { s.Stale = true; /* keep last-known values, but flag them as possibly stale */ }
@@ -242,11 +323,15 @@ public sealed class AgentWorker : BackgroundService
     }
 
     /// Warn once when the agent's gas wallet dips below the threshold (edge-triggered).
+    /// A fully DRAINED wallet (a real 0 from a successful balance read) is the loudest
+    /// case of all — but an UNREAD default of 0 (Stale tick) must never false-alarm.
     private async Task MaybeWarnLowGas()
     {
+        if (_vault.ReadOnly) return;       // observer mode has no gas wallet to monitor
+        if (_feed.State.Stale) return;     // last read failed → 0 may just mean "not read"
         var warn = _cfg.GetValue("Agent:LowGasWarnCspr", 50m);
         var gas = _feed.State.AgentGasCspr;
-        if (gas > 0 && gas < warn)
+        if (gas < warn)
         {
             if (!_gasWarned)
             {
@@ -254,11 +339,12 @@ public sealed class AgentWorker : BackgroundService
                 _gasWarned = true;
             }
         }
-        else if (gas >= warn) _gasWarned = false;
+        else _gasWarned = false;
     }
 
     private Task Emit(string kind, string message, string? validator = null, decimal? amountCspr = null, string? txHash = null, bool? success = null) =>
-        _feed.Push(new AuditEvent(DateTime.UtcNow.ToString("HH:mm:ss"), _tick, kind, message, validator, amountCspr, txHash, success));
+        _feed.Push(new AuditEvent(DateTime.UtcNow.ToString("HH:mm:ss"), _tick, kind, message, validator, amountCspr, txHash, success,
+            DateTime.UtcNow.ToString("o")));
 
     private static ulong Motes(decimal cspr) => (ulong)(cspr * 1_000_000_000m);
 }

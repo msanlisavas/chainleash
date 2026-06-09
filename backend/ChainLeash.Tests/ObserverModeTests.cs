@@ -5,9 +5,9 @@ using Xunit;
 
 namespace ChainLeash.Tests;
 
-/// With no agent key present (a fresh clone / observer deployment), the vault must boot but
-/// sign NOTHING — this is what stops `docker compose up` from crash-looping and what keeps a
-/// keyless agent from acting.
+/// With no agent key present, the CasperVault layer must construct cleanly and refuse to
+/// sign. (The end-to-end observer behavior — keyless `docker compose up` boots, serves the
+/// dashboard, and never acts — is verified live against testnet, not here.)
 public class ObserverModeTests
 {
     static IConfiguration Cfg() => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>

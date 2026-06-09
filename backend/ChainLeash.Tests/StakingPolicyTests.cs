@@ -49,6 +49,8 @@ public class StakingPolicyTests
     [InlineData(700, 600, false, true)]  // over the cap → must be co-signed
     [InlineData(500, 600, true, true)]   // elevated risk read → must be co-signed
     [InlineData(500, 600, false, false)] // within cap, normal risk → routine, no co-sign
+    [InlineData(600, 600, false, false)] // EXACTLY at the cap → routine (the chain's OverCap is strict >, too)
+    [InlineData(600, 600, true, true)]   // at the cap but elevated risk → still co-signed
     public void RequiresProposal_when_over_cap_or_elevated_risk(
         decimal amount, decimal cap, bool elevated, bool expected) =>
         Assert.Equal(expected, StakingPolicy.RequiresProposal(amount, cap, elevated));

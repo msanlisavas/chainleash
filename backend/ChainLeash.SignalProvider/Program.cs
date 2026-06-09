@@ -9,10 +9,21 @@
 
 using System.Collections.Concurrent;
 using System.Numerics;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.local.json", optional: true);
+// Per-IP rate limit: every anonymous /rate hit fans out into CSPR.cloud lookups on the
+// shared (quota-limited) key — don't let one caller amplify through it.
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = 429;
+    o.AddPolicy("rate", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { Window = TimeSpan.FromMinutes(1), PermitLimit = 30, QueueLimit = 0 }));
+});
 var app = builder.Build();
+app.UseRateLimiter();
 
 var cfg = app.Configuration;
 // payTo = the provider's account hash (the agent transfers the fee here).
@@ -24,9 +35,14 @@ var expectedPayer = (cfg["X402:ExpectedPayerAccountHash"] ?? "11b5fdcc0b9653c5d6
 var apiBase = (cfg["X402:CsprCloudBaseUrl"] ?? "https://api.testnet.cspr.cloud").TrimEnd('/');
 var apiKey = cfg["X402:CsprCloudAccessKey"] ?? cfg["Casper:CsprCloudAccessKey"] ?? "55f79117-fc4d-4d60-9956-65423f39a06a";
 
-var http = new HttpClient { BaseAddress = new Uri(apiBase + "/") };
+var http = new HttpClient { BaseAddress = new Uri(apiBase + "/"), Timeout = TimeSpan.FromSeconds(30) };
 if (!string.IsNullOrWhiteSpace(apiKey)) http.DefaultRequestHeaders.Add("Authorization", apiKey);
-var consumed = new ConcurrentDictionary<string, byte>(); // replay protection: each proof spends once
+// Replay protection: each proof spends exactly once. The claim is made ATOMICALLY before
+// verification (TryAdd) and released only if verification fails, so two concurrent
+// requests with the same hash can never both be served. FIFO-bounded: garbage hashes
+// can't grow it forever, and evicting ancient entries is safe because re-verifying an
+// old proof still requires it to be a real settled payment from the bound payer.
+var consumed = new BoundedReplaySet(100_000);
 
 IResult Challenge() => Results.Json(new
 {
@@ -77,17 +93,23 @@ async Task<(double rate, string risk)> Signal(string? validator)
         if (!string.IsNullOrWhiteSpace(validator))
         {
             var era = (await http.GetFromJsonAsync<System.Text.Json.JsonElement>("auction-metrics")).GetProperty("data").GetProperty("current_era_id").GetInt64();
-            using var v = await http.GetAsync($"validators?era_id={era}&page_size=100");
-            using var vDoc = System.Text.Json.JsonDocument.Parse(await v.Content.ReadAsStringAsync());
-            foreach (var val in vDoc.RootElement.GetProperty("data").EnumerateArray())
+            for (var page = 1; page <= 10; page++) // paginate: the era set can exceed one page
             {
-                if (string.Equals(val.GetProperty("public_key").GetString(), validator, StringComparison.OrdinalIgnoreCase))
+                using var v = await http.GetAsync($"validators?era_id={era}&page={page}&page_size=100");
+                using var vDoc = System.Text.Json.JsonDocument.Parse(await v.Content.ReadAsStringAsync());
+                foreach (var val in vDoc.RootElement.GetProperty("data").EnumerateArray())
                 {
-                    var fee = val.TryGetProperty("fee", out var f) && f.ValueKind == System.Text.Json.JsonValueKind.Number ? f.GetInt32() : 0;
-                    var active = val.TryGetProperty("is_active", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.True;
-                    // Elevated when commission is high or the validator isn't active this era.
-                    return (fee, (!active || fee > 8) ? "elevated" : "low");
+                    if (string.Equals(val.GetProperty("public_key").GetString(), validator, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var fee = val.TryGetProperty("fee", out var f) && f.ValueKind == System.Text.Json.JsonValueKind.Number ? f.GetInt32() : 0;
+                        var active = val.TryGetProperty("is_active", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.True;
+                        // Elevated when commission is high or the validator isn't active this era.
+                        return (fee, (!active || fee > 8) ? "elevated" : "low");
+                    }
                 }
+                var pageCount = vDoc.RootElement.TryGetProperty("page_count", out var pc) && pc.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? pc.GetInt32() : 1;
+                if (page >= pageCount) break;
             }
             return (0, "elevated"); // not in the active set this era → elevated
         }
@@ -102,14 +124,55 @@ app.MapGet("/", () => "CHAINLEASH x402 signal provider. GET /rate (HTTP 402 unti
 
 app.MapGet("/rate", async (HttpContext ctx) =>
 {
-    var proof = ctx.Request.Headers["X-Payment"].ToString();
+    // Normalize the proof (a deploy hash): trim + lowercase so case games can't dodge the
+    // consumed set, and reject anything that isn't hash-shaped before touching upstream.
+    var proof = ctx.Request.Headers["X-Payment"].ToString().Trim().ToLowerInvariant();
     if (string.IsNullOrWhiteSpace(proof)) return Challenge();
-    if (consumed.ContainsKey(proof)) return Challenge();          // replay: one read per payment
-    if (!await VerifyPayment(proof)) return Challenge();          // unverified / unsettled / underpaid / wrong payer
-    if (consumed.Count < 100_000) consumed.TryAdd(proof, 1);      // bounded (payer-binding keeps this tiny in practice)
+    if (proof.Length != 64 || !proof.All(Uri.IsHexDigit)) return Challenge();
+
+    if (!consumed.TryAdd(proof)) return Challenge();              // atomic claim: replay → one read per payment
+
+    if (!await VerifyPayment(proof))                              // unverified / unsettled / underpaid / wrong payer
+    {
+        consumed.Remove(proof);                                   // release the claim — a pending tx may settle later
+        return Challenge();
+    }
 
     var (rate, risk) = await Signal(ctx.Request.Query["validator"]);
     return Results.Json(new { rate, risk, paidWith = proof });
-});
+}).RequireRateLimiting("rate");
 
 app.Run();
+
+/// Bounded FIFO replay set (dict + linked list under one lock — a released key leaves no
+/// stale eviction entry that could prematurely evict a later re-claim of the same hash).
+sealed class BoundedReplaySet(int capacity)
+{
+    private readonly object _lock = new();
+    private readonly Dictionary<string, LinkedListNode<string>> _nodes = new();
+    private readonly LinkedList<string> _order = new();
+
+    public bool TryAdd(string key)
+    {
+        lock (_lock)
+        {
+            if (_nodes.ContainsKey(key)) return false;
+            _nodes[key] = _order.AddLast(key);
+            if (_nodes.Count > capacity)
+            {
+                var oldest = _order.First!;
+                _order.RemoveFirst();
+                _nodes.Remove(oldest.Value);
+            }
+            return true;
+        }
+    }
+
+    public void Remove(string key)
+    {
+        lock (_lock)
+        {
+            if (_nodes.Remove(key, out var node)) _order.Remove(node);
+        }
+    }
+}

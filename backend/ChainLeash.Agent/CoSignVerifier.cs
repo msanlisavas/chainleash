@@ -15,13 +15,20 @@ public static class CoSignVerifier
         var fields = v1?["payload"]?["fields"]?.AsObject();
         if (fields is null) return "tx has no Version1 payload (not a TransactionV1)";
 
-        if (!string.Equals(fields["entry_point"]?["Custom"]?.GetValue<string>(), "approve_material", StringComparison.OrdinalIgnoreCase))
+        // entry_point/target can be JSON VALUE nodes for other tx kinds (e.g. "Native") —
+        // indexing into a value throws, and a throw here must read as "reject", not crash.
+        string? entryPoint = null, addr = null;
+        try { entryPoint = fields["entry_point"]?["Custom"]?.GetValue<string>(); } catch { /* not a Custom entry point */ }
+        try { addr = fields["target"]?["Stored"]?["id"]?["ByPackageHash"]?["addr"]?.GetValue<string>()?.Replace("hash-", ""); }
+        catch { /* not a Stored/ByPackageHash target */ }
+        if (!string.Equals(entryPoint, "approve_material", StringComparison.OrdinalIgnoreCase))
             return "tx is not an approve_material call";
-        var addr = fields["target"]?["Stored"]?["id"]?["ByPackageHash"]?["addr"]?.GetValue<string>()?.Replace("hash-", "");
-        if (!string.Equals(addr, pkg?.Replace("hash-", ""), StringComparison.OrdinalIgnoreCase))
+        if (addr is null || !string.Equals(addr, pkg?.Replace("hash-", ""), StringComparison.OrdinalIgnoreCase))
             return "tx targets a different contract";
 
-        // id arg — require it, parseable, equal to the requested id.
+        // id arg — require it, parseable, UNIQUE, and equal to the requested id. Duplicate
+        // args are rejected outright: the Casper runtime reads the FIRST occurrence, so a
+        // last-wins parse here would be a fail-open seam between verifier and chain.
         uint? foundId = null;
         try
         {
@@ -29,7 +36,10 @@ public static class CoSignVerifier
             {
                 var arr = pair?.AsArray();
                 if (arr is { Count: 2 } && arr[0]?.GetValue<string>() == "id" && arr[1]?["parsed"] is JsonNode pv)
+                {
+                    if (foundId is not null) return "tx has multiple id arguments";
                     foundId = (uint)pv.GetValue<long>();
+                }
             }
         }
         catch { return "could not read the proposal id from the tx"; }
