@@ -1,27 +1,34 @@
-# Dashboard
+# CHAINLEASH dashboard
 
-This project was generated with [Angular CLI](https://github.com/angular/angular-cli) version 18.0.1.
+The live operator dashboard for the CHAINLEASH staking agent: the full leash state read
+from chain (per-action cap, free/total balance, slashable bond, per-validator cap,
+violations, kill-switch), a live audit feed of every agent decision, the validator policy
+view, and the owner's **in-wallet co-sign** action for material proposals (via CSPR.click —
+the server never holds the owner key).
 
-## Development server
+Angular 20, standalone single component, signals + SignalR. No router, no state library —
+the agent is the single source of truth and everything renders from its snapshot + stream.
 
-Run `ng serve` for a dev server. Navigate to `http://localhost:4200/`. The application will automatically reload if you change any of the source files.
+## Develop
 
-## Code scaffolding
+```bash
+npm ci
+npm start          # ng serve on :4200, talks to the agent at http://localhost:5179
+```
 
-Run `ng generate component component-name` to generate a new component. You can also use `ng generate directive|pipe|service|class|guard|interface|enum|module`.
+Run the agent first (`dotnet run` in `backend/ChainLeash.Agent`) — with no keys it boots
+in observer mode, which is enough to develop against.
 
 ## Build
 
-Run `ng build` to build the project. The build artifacts will be stored in the `dist/` directory.
+```bash
+npm run build      # emits straight into ../../backend/ChainLeash.Agent/wwwroot
+```
 
-## Running unit tests
+In production the agent serves the built dashboard itself — same origin, no CORS.
 
-Run `ng test` to execute the unit tests via [Karma](https://karma-runner.github.io).
+## Test
 
-## Running end-to-end tests
-
-Run `ng e2e` to execute the end-to-end tests via a platform of your choice. To use this command, you need to first add a package that implements end-to-end testing capabilities.
-
-## Further help
-
-To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+```bash
+npm run test:ci    # karma/jasmine, headless — pure view logic only (no network)
+```
