@@ -1,5 +1,2 @@
 [[contracts]]
-fqn = "flipper::Flipper"
-
-[[contracts]]
 fqn = "governed_vault::GovernedVault"

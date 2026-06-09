@@ -39,6 +39,8 @@ pub enum Error {
     NotInstaller = 14,
     ExceedsCommitted = 15, // agent tried to (un/re)delegate more than it has directed to a validator
     CapNotHigher = 16,     // raise_cap must actually raise the cap
+    UnauthorizedBondDeposit = 17, // bond may only be opened by a principal and topped up by its holder
+    AgentOwnerSame = 18,   // the agent and owner roles must never collapse into one key
 }
 
 /// A pending over-cap (material) staking move awaiting owner approval.
@@ -89,6 +91,10 @@ pub struct MaterialExecuted {
     pub id: u32,
     pub validator: PublicKey,
     pub amount: U512,
+}
+#[odra::event]
+pub struct MaterialRejected {
+    pub id: u32,
 }
 #[odra::event]
 pub struct CapTightened {
@@ -197,6 +203,11 @@ impl GovernedVault {
         if self.env().caller() != installer {
             self.env().revert(Error::NotInstaller);
         }
+        // The whole leash rests on the agent being a strictly weaker principal than the
+        // owner; the same key in both roles would silently void the custody guarantee.
+        if agent == owner {
+            self.env().revert(Error::AgentOwnerSame);
+        }
         self.agent.set(agent);
         self.owner.set(owner);
         self.value_cap.set(value_cap);
@@ -211,13 +222,32 @@ impl GovernedVault {
     }
 
     /// Post the agent's CSPR bond (held in the vault; violations are recorded on-chain).
+    /// The bond may be OPENED only by a principal (agent or owner), and while a bond is
+    /// outstanding only the recorded holder may top it up — otherwise anyone could attach
+    /// 1 mote to overwrite `bond_holder` and capture the full pooled bond when the owner
+    /// later calls return_bond. Once the bond is returned (or fully slashed) the slot
+    /// reopens, so a rotated operator can post a fresh bond.
     #[odra(payable)]
     pub fn deposit_bond(&mut self) {
         let amount = self.env().attached_value();
         let from = self.env().caller();
+        match self.bond_holder.get() {
+            Some(holder) if self.bond.get_or_default() > U512::zero() => {
+                if from != holder {
+                    self.env().revert(Error::UnauthorizedBondDeposit);
+                }
+            }
+            _ => {
+                let agent = self.agent.get().unwrap_or_revert_with(self, Error::NotInitialized);
+                let owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
+                if from != agent && from != owner {
+                    self.env().revert(Error::UnauthorizedBondDeposit);
+                }
+                self.bond_holder.set(from); // return destination for return_bond
+            }
+        }
         let bond = self.bond.get_or_default() + amount;
         self.bond.set(bond);
-        self.bond_holder.set(from); // return destination for return_bond
         self.env().emit_event(BondDeposited { from, amount, bond });
     }
 
@@ -275,6 +305,8 @@ impl GovernedVault {
     pub fn propose_material(&mut self, validator: PublicKey, amount: U512, undelegate: bool) -> u32 {
         self.assert_agent();
         self.assert_not_paused();
+        self.assert_rate_ok(); // proposals are agent moves too — a hijacked agent must not
+                               // be able to spam the queue (each entry is permanent storage)
         let id = self.next_id.get_or_default();
         self.next_id.set(id + 1);
         self.proposals.set(&id, Proposal { validator: validator.clone(), amount, undelegate, resolved: false });
@@ -306,6 +338,20 @@ impl GovernedVault {
         p.resolved = true;
         self.env().emit_event(MaterialExecuted { id, validator: p.validator.clone(), amount: p.amount });
         self.proposals.set(&id, p);
+    }
+
+    /// Owner REJECTS a pending material proposal without executing it — the cleanup path
+    /// for bad or stale agent proposals (approve_material is the only other resolution,
+    /// and it executes). Works while paused so the owner can clear the queue mid-incident.
+    pub fn reject_material(&mut self, id: u32) {
+        self.assert_owner();
+        let mut p = self.proposals.get(&id).unwrap_or_revert_with(self, Error::NoSuchProposal);
+        if p.resolved {
+            self.env().revert(Error::ProposalAlreadyResolved);
+        }
+        p.resolved = true;
+        self.proposals.set(&id, p);
+        self.env().emit_event(MaterialRejected { id });
     }
 
     /// Agent/overseer may only LOWER the cap (tighten the leash).
@@ -374,6 +420,9 @@ impl GovernedVault {
     pub fn transfer_ownership(&mut self, new_owner: Address) {
         self.assert_owner();
         let old_owner = self.owner.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        if Some(new_owner) == self.agent.get() {
+            self.env().revert(Error::AgentOwnerSame); // roles must stay distinct
+        }
         self.owner.set(new_owner);
         self.env().emit_event(OwnershipTransferred { old_owner, new_owner });
     }
@@ -383,6 +432,9 @@ impl GovernedVault {
     pub fn set_agent(&mut self, new_agent: Address) {
         self.assert_owner();
         let old_agent = self.agent.get().unwrap_or_revert_with(self, Error::NotInitialized);
+        if Some(new_agent) == self.owner.get() {
+            self.env().revert(Error::AgentOwnerSame); // roles must stay distinct
+        }
         self.agent.set(new_agent);
         self.env().emit_event(AgentRotated { old_agent, new_agent });
     }
@@ -573,7 +625,9 @@ impl GovernedVault {
         }
         let now = self.env().get_block_time();
         let last = self.last_action_time.get_or_default();
-        if last != 0 && now < last + interval {
+        // saturating: an extreme owner-set interval must clamp, not wrap around and
+        // silently disable the cooldown (wasm release builds don't trap on overflow)
+        if last != 0 && now < last.saturating_add(interval) {
             self.env().revert(Error::RateLimited);
         }
         self.last_action_time.set(now);
@@ -939,6 +993,134 @@ mod tests {
         assert_eq!(vault.try_raise_cap(u(500)), Err(Error::CapNotHigher.into()));  // lower → reject
         vault.raise_cap(u(2000));
         assert_eq!(vault.value_cap(), u(2000));
+    }
+
+    #[test]
+    fn stranger_cannot_open_or_redirect_the_bond() {
+        let (env, mut vault, agent, _owner, _v1, _v2) = setup();
+        let stranger = env.get_account(2);
+        env.set_caller(stranger);
+        // a non-principal can never OPEN the bond...
+        assert_eq!(vault.with_tokens(u(1)).try_deposit_bond(), Err(Error::UnauthorizedBondDeposit.into()));
+        env.set_caller(agent);
+        vault.with_tokens(u(300)).deposit_bond(); // the operator opens it
+        assert_eq!(vault.get_bond_holder(), Some(agent));
+        env.set_caller(stranger);
+        // ...and while a bond is outstanding, nobody but the holder may touch it — so
+        // bond_holder can't be overwritten to redirect the pooled bond on return_bond
+        assert_eq!(vault.with_tokens(u(1)).try_deposit_bond(), Err(Error::UnauthorizedBondDeposit.into()));
+        assert_eq!(vault.get_bond_holder(), Some(agent));
+        env.set_caller(agent);
+        vault.with_tokens(u(50)).deposit_bond(); // the holder may top up
+        assert_eq!(vault.bond(), u(350));
+    }
+
+    #[test]
+    fn bond_slot_reopens_after_return() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.with_tokens(u(300)).deposit_bond();
+        env.set_caller(owner);
+        // the holder may not be replaced while the bond is live, even by the owner
+        assert_eq!(vault.with_tokens(u(1)).try_deposit_bond(), Err(Error::UnauthorizedBondDeposit.into()));
+        vault.return_bond(); // clean exit: bond → 0
+        vault.with_tokens(u(100)).deposit_bond(); // slot reopens for a (new) principal
+        assert_eq!(vault.get_bond_holder(), Some(owner));
+        assert_eq!(vault.bond(), u(100));
+    }
+
+    #[test]
+    fn propose_material_respects_cooldown() {
+        let (env, mut vault, agent, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        vault.set_action_interval(5_000);
+        env.advance_block_time(10_000);
+        env.set_caller(agent);
+        vault.propose_material(v2.clone(), u(5000), false); // first move ok
+        // a hijacked agent can't spam permanent proposal storage faster than the cooldown
+        assert_eq!(
+            vault.try_propose_material(v2.clone(), u(5000), false),
+            Err(Error::RateLimited.into())
+        );
+        env.advance_block_time(5_000);
+        vault.propose_material(v2, u(5000), false); // cooldown elapsed → ok
+    }
+
+    #[test]
+    fn owner_can_reject_material_without_executing() {
+        let (env, mut vault, agent, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        let id = vault.propose_material(v2.clone(), u(5000), false);
+        assert_eq!(vault.try_reject_material(id), Err(Error::NotOwner.into())); // agent can't clear its own queue
+        env.set_caller(owner);
+        vault.reject_material(id);
+        assert_eq!(vault.delegated_to(v2), u(0)); // never executed
+        assert_eq!(vault.try_approve_material(id), Err(Error::ProposalAlreadyResolved.into()));
+        assert_eq!(vault.try_reject_material(id), Err(Error::ProposalAlreadyResolved.into()));
+    }
+
+    #[test]
+    fn initialize_rejects_agent_owner_collision() {
+        let env = odra_test::env();
+        let owner = env.get_account(0);
+        env.set_caller(owner);
+        let mut vault = GovernedVault::deploy(&env, NoArgs);
+        assert_eq!(vault.try_initialize(owner, owner, u(1000)), Err(Error::AgentOwnerSame.into()));
+    }
+
+    #[test]
+    fn role_rotation_keeps_agent_and_owner_distinct() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
+        env.set_caller(owner);
+        assert_eq!(vault.try_set_agent(owner), Err(Error::AgentOwnerSame.into()));
+        assert_eq!(vault.try_transfer_ownership(agent), Err(Error::AgentOwnerSame.into()));
+    }
+
+    #[test]
+    fn per_validator_cap_enforced_on_redelegate_destination() {
+        let (env, mut vault, agent, owner, v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        vault.set_max_per_validator(u(600));
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500
+        vault.delegate(v2.clone(), u(400)); // committed[v2] = 400
+        // moving 500 from v1 INTO v2 would push v2 to 900 > 600 → the ceiling holds
+        assert_eq!(vault.try_redelegate(v1, v2, u(500)), Err(Error::PerValidatorCapExceeded.into()));
+    }
+
+    #[test]
+    fn extreme_action_interval_cannot_wrap_and_disable_the_cooldown() {
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.set_action_interval(u64::MAX);
+        env.advance_block_time(10_000);
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(100)); // first move ok (no prior timestamp)
+        env.advance_block_time(1_000_000);
+        // last + u64::MAX must saturate, not wrap to a small value that waves this through
+        assert_eq!(vault.try_delegate(v1, u(100)), Err(Error::RateLimited.into()));
+    }
+
+    #[test]
+    fn owner_material_undelegate_is_exempt_from_committed_bound() {
+        // The escape hatch: the owner's reviewed undelegate is NOT bounded by `committed`,
+        // so principal + auto-compounded rewards can be unwound in one co-signed move.
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500
+        let id = vault.propose_material(v1.clone(), u(800), true); // > committed
+        env.set_caller(owner);
+        let r = vault.try_approve_material(id);
+        // The leash's own guard must not fire; only the test VM's auction (which has no
+        // rewards, so real stake == 500) may reject the amount itself.
+        assert_ne!(r, Err(Error::ExceedsCommitted.into()));
+        if r.is_ok() {
+            assert_eq!(vault.committed_to(v1), u(0)); // sub_committed saturates at zero
+        }
     }
 
     #[test]

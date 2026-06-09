@@ -4,13 +4,13 @@
 set -euo pipefail
 
 # cargo-odra's wasm-opt step needs a recent binaryen; Debian's apt version is too old
-# (lacks --llvm-memory-copy-fill-lowering). Install a fresh one if missing.
+# (lacks --llvm-memory-copy-fill-lowering). PINNED so the wasm-opt that rewrites the
+# deployed custody contract is reproducible — never floats with "latest".
+BINARYEN_TAG="version_124"
 if ! wasm-opt --help 2>/dev/null | grep -q -- '--llvm-memory-copy-fill-lowering'; then
-  echo "Installing recent binaryen..."
-  TAG=$(curl -sSL https://api.github.com/repos/WebAssembly/binaryen/releases/latest | grep -oP '"tag_name": "\K[^"]+')
-  echo "binaryen $TAG"
-  curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/$TAG/binaryen-$TAG-x86_64-linux.tar.gz" | tar xz -C /opt
-  ln -sf "/opt/binaryen-$TAG/bin/wasm-opt" /usr/local/bin/wasm-opt
+  echo "Installing binaryen $BINARYEN_TAG..."
+  curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_TAG/binaryen-$BINARYEN_TAG-x86_64-linux.tar.gz" | tar xz -C /opt
+  ln -sf "/opt/binaryen-$BINARYEN_TAG/bin/wasm-opt" /usr/local/bin/wasm-opt
 fi
 wasm-opt --version
 
