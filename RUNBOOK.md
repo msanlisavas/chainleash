@@ -6,7 +6,7 @@ demo. Everything runs against **Casper 2.0 testnet**.
 ## Prerequisites
 
 - **.NET 10 SDK** (`dotnet --version` ≥ 10.0.300)
-- **Node 20+ and Angular CLI 18** (`ng version`) — for the dashboard
+- **Node 20+ and Angular CLI 20** (`ng version`) — for the dashboard
 - **Docker** — runs the full stack, and the Odra/Rust contract toolchain (`casper-types`
   doesn't host-compile on Windows; we build it in a Linux container)
 - A **CSPR.cloud** access key (node RPC + REST) — the public testnet key works for dev
@@ -166,7 +166,7 @@ CI (`.github/workflows/ci.yml`) runs both on every push/PR.
 ## Live deployment + on-chain artifacts
 
 Package
-[`f5600a9f…c96591`](https://testnet.cspr.live/contract-package/f5600a9fcca977de4d2ba259a02ecc9ec5c2256022080b7824cd97fcf5c96591)
+[`612b0776…0758e3`](https://testnet.cspr.live/contract-package/612b07767d7e8245a8a2d2dfd77e56e34776e7be7ecf81b95429b092a30758e3)
 on testnet (upgradable). The full artifact list (with transaction hashes) is in
 [README.md](README.md#proven-on-casper-20-testnet).
 

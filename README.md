@@ -88,7 +88,7 @@ That deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
-[`f5600a9f…c96591`](https://testnet.cspr.live/contract-package/f5600a9fcca977de4d2ba259a02ecc9ec5c2256022080b7824cd97fcf5c96591)).
+[`612b0776…0758e3`](https://testnet.cspr.live/contract-package/612b07767d7e8245a8a2d2dfd77e56e34776e7be7ecf81b95429b092a30758e3)).
 Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
