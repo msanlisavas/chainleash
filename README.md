@@ -105,13 +105,13 @@ Selected on-chain artifacts (click to verify):
 
 ### Independently security-reviewed
 
-CHAINLEASH has been through three adversarial multi-agent security reviews — a leash-invariant red-team, a completion audit, and a full security + quality review — with every finding fixed. The final review landed **0 critical / 0 high** and independently verified the core guarantee: a fully compromised agent can mis-delegate within the leash but has **no path to move CSPR out of the vault** — every exit is owner-gated, and `withdraw` reserves the bond.
+CHAINLEASH has been through four adversarial multi-agent security reviews — a leash-invariant red-team, a completion audit, and two full security + quality reviews — with every confirmed finding fixed. The reviews independently verified the core guarantee: a fully compromised agent can mis-delegate within the leash but has **no path to move CSPR out of the vault** — every exit is owner-gated, and `withdraw` reserves the bond.
 
-**On-chain hardening:** installer-gated `init` (no front-run window); the per-validator cap and kill-switch are enforced on the material path too; a lag-free in-contract accumulator; the agent's undelegate/redelegate are bounded by what it actually directed (a compromised agent can't even grief positions into unbonding); a genuinely **slashable** and **returnable** bond; and **recoverable** ownership/agent keys.
+**On-chain hardening:** installer-gated `init` (no front-run window); the per-validator cap and kill-switch are enforced on the material path too; a lag-free in-contract accumulator; the agent's undelegate/redelegate are bounded by what it actually directed (a compromised agent can't even grief positions into unbonding); the bond can only be opened by a principal and topped up by its recorded holder (no one can redirect it); proposals respect the action cooldown and the owner can reject them without executing; the agent and owner roles can never collapse into one key; a genuinely **slashable** and **returnable** bond; and **recoverable** ownership/agent keys.
 
-**Off-chain hardening:** the API locks CORS to the dashboard origin, rate-limits the public endpoints, makes the co-sign confirm single-use and fail-closed (a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback off-by-default and fail-closed.
+**Off-chain hardening:** the API locks CORS to the dashboard origin, serves strict security headers (CSP included), rate-limits the public endpoints in two lanes (cheap reads vs. chain-polling co-sign), makes the co-sign confirm single-use and fail-closed (a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback off-by-default and fail-closed. The agent's chain reads distinguish "field unset" from "RPC failed", so a rate-limited upstream can never read as *kill-switch off* — the agent holds instead of acting on fabricated state, and the dashboard flags the data as stale.
 
-**Coverage:** 31 contract tests + 37 backend tests, with regression coverage for each fix. Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
+**Coverage:** 39 contract tests + 59 backend tests + dashboard view-logic specs, with regression coverage for each fix — all gated in CI (including the contract suite). Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
 
 ## Run it
 
@@ -153,7 +153,7 @@ The agent's audit feed is **persisted** across restarts, and secrets are mounted
 
 ## Status
 
-🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). Live end-to-end on Casper 2.0 testnet, independently security-reviewed (0 critical / 0 high), and covered by 31 contract + 37 backend tests. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
+🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). Live end-to-end on Casper 2.0 testnet, independently security-reviewed four times, and covered by 39 contract + 59 backend tests plus dashboard specs — all gated in CI. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
 
 ## License
 

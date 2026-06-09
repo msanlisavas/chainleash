@@ -5,7 +5,8 @@
 # Build once:  docker build -t chainleash-odra tools/odra-build
 # Use:         docker run --rm -v "<contractdir>:/work" -v ... chainleash-odra \
 #                bash -c "cargo odra build && cargo run --bin <x>_livenet --features livenet"
-FROM rust:latest
+# Pinned base (the toolchain that matters is the nightly below; the host rust just bootstraps it).
+FROM rust:1.93-bookworm
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends binaryen \

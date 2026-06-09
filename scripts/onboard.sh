@@ -38,6 +38,17 @@ AGENT_CFG="$ROOT/backend/ChainLeash.Agent/appsettings.local.json"
 motes() { awk "BEGIN{printf \"%.0f\", $1 * 1000000000}"; }
 gt0()   { awk "BEGIN{exit !($1 > 0)}"; }
 run_spike() { ( cd "$SPIKE" && dotnet run --no-build -- "$@" ); }
+# Every mutating step must report on-chain success (the spike prints `EXECUTED IsSuccess=True`;
+# its exit code is 0 even on REJECTED/timeout) — otherwise abort before claiming the vault is armed.
+run_step() {
+  local name="$1" out
+  # print captured output even on a nonzero exit — the spike's `error: …` message and
+  # its keygen/config hints are the diagnostic the operator needs
+  out="$(run_spike "$@")" || { printf '%s\n' "$out"; echo "$name failed — aborting; the vault is NOT fully armed." >&2; exit 1; }
+  printf '%s\n' "$out"
+  printf '%s' "$out" | grep -q "IsSuccess=True" \
+    || { echo "$name did not report on-chain success — aborting; the vault is NOT fully armed." >&2; exit 1; }
+}
 
 echo "==> Building spike harness..."
 ( cd "$SPIKE" && dotnet build -clp:ErrorsOnly >/dev/null ) || { echo "spike build failed" >&2; exit 1; }
@@ -53,13 +64,13 @@ PKG="$(printf '%s\n' "$FIND" | grep -oE 'hash-[0-9a-fA-F]{64}' | head -1)"
 echo "    package: $PKG"
 
 echo "==> [2/6] Initializing (cap = $CAP CSPR)..."
-run_spike vault-init "$PKG" "$(motes "$CAP")"
+run_step vault-init "$PKG" "$(motes "$CAP")"
 
 if [ -n "$VALIDATORS" ]; then
   IFS=',' read -ra VS <<< "$VALIDATORS"
   for v in "${VS[@]}"; do
     echo "==> [3/6] Allowlisting validator ${v:0:10}..."
-    run_spike vault-set-validator "$PKG" "$v" true
+    run_step vault-set-validator "$PKG" "$v" true
   done
 else
   echo "WARNING: no --validators given; the agent will have an empty allowlist and stay idle." >&2
@@ -67,42 +78,92 @@ fi
 
 if gt0 "$DEPOSIT"; then
   echo "==> [4/6] Depositing $DEPOSIT CSPR into the vault..."
-  run_spike vault-deposit "$PKG" "$(motes "$DEPOSIT")"
+  run_step vault-deposit "$PKG" "$(motes "$DEPOSIT")"
 fi
 if gt0 "$BOND"; then
   echo "==> [5/6] Posting $BOND CSPR slashable bond..."
-  run_spike vault-bond "$PKG" "$(motes "$BOND")"
+  run_step vault-bond "$PKG" "$(motes "$BOND")"
 fi
 
 # Decentralization controls: per-validator concentration cap (opt-in) + anti-thrash cooldown
 # (on by default) — so a new vault isn't running the weakest posture.
 if gt0 "$MAXVAL"; then
   echo "==> Setting per-validator cap = $MAXVAL CSPR..."
-  run_spike vault-set-maxval "$PKG" "$(motes "$MAXVAL")"
+  run_step vault-set-maxval "$PKG" "$(motes "$MAXVAL")"
 fi
 if [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
   echo "==> Setting action cooldown = $COOLDOWN s..."
-  run_spike vault-set-interval "$PKG" "$((COOLDOWN * 1000))"
+  run_step vault-set-interval "$PKG" "$((COOLDOWN * 1000))"
 fi
 
 echo "==> [6/6] Pointing the agent at the new vault..."
 if [ -z "$OWNER" ] && [ -f "$SPIKE/secrets/human/public_key_hex" ]; then
   OWNER="$(tr -d '[:space:]' < "$SPIKE/secrets/human/public_key_hex")"
 fi
-# Reuse the CSPR.cloud key the spike already uses (falls back to the public testnet key).
-CSPR_KEY="$(grep -oE '"CsprCloudAccessKey"[[:space:]]*:[[:space:]]*"[^"]*"' "$SPIKE/Config/settings.local.json" 2>/dev/null | sed -E 's/.*"([^"]*)" *$/\1/' | head -1)"
-[ -n "$CSPR_KEY" ] || CSPR_KEY="55f79117-fc4d-4d60-9956-65423f39a06a"
-# Build the allowlist JSON array.
-ALLOW_JSON=""
-if [ -n "$VALIDATORS" ]; then
-  IFS=',' read -ra VS <<< "$VALIDATORS"
-  for v in "${VS[@]}"; do ALLOW_JSON="${ALLOW_JSON}\"$v\","; done
-  ALLOW_JSON="${ALLOW_JSON%,}"
-fi
-cat > "$AGENT_CFG" <<EOF
+# Merge into an existing appsettings.local.json (same semantics as onboard.ps1) — keeps
+# secrets and any hand-set values. NEVER copy a private CSPR.cloud key into this file:
+# an existing key is preserved; only when absent we seed the shared PUBLIC testnet key
+# (get your own at console.cspr.cloud). Bond target: record what was just bonded; a
+# re-run without --bond keeps the existing target.
+PUBLIC_TESTNET_KEY="55f79117-fc4d-4d60-9956-65423f39a06a"
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$AGENT_CFG" "$PKG" "$OWNER" "$VALIDATORS" "$BOND" "$APPID" "$PUBLIC_TESTNET_KEY" <<'PY'
+import json, os, sys
+path, pkg, owner, allow_csv, bond, appid, pubkey = sys.argv[1:8]
+cfg = {}
+if os.path.exists(path):
+    with open(path, encoding="utf-8-sig") as f:
+        cfg = json.load(f)
+casper = cfg.setdefault("Casper", {})
+staking = cfg.setdefault("Staking", {})
+dash = cfg.setdefault("Dashboard", {})
+casper.setdefault("CsprCloudAccessKey", pubkey)
+casper["GovernedVaultPackageHash"] = pkg
+if owner:
+    casper["OwnerPublicKeyHex"] = owner
+casper.setdefault("AllowServerKeyCoSign", False)
+staking["Allowlist"] = [v for v in allow_csv.split(",") if v]
+bond_n = float(bond) if "." in bond else int(bond)
+if bond_n > 0 or "BondCspr" not in staking:
+    staking["BondCspr"] = bond_n
+dash["CsprClickAppId"] = appid
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+elif command -v jq >/dev/null 2>&1; then
+  EXISTING="{}"; [ -f "$AGENT_CFG" ] && EXISTING="$(cat "$AGENT_CFG")"
+  TMP="$(mktemp)"
+  printf '%s' "$EXISTING" | jq \
+    --arg pkg "$PKG" --arg owner "$OWNER" --arg allow "$VALIDATORS" \
+    --argjson bond "$BOND" --arg appid "$APPID" --arg pubkey "$PUBLIC_TESTNET_KEY" '
+    .Casper = (.Casper // {}) | .Staking = (.Staking // {}) | .Dashboard = (.Dashboard // {})
+    | .Casper.CsprCloudAccessKey = (.Casper.CsprCloudAccessKey // $pubkey)
+    | .Casper.GovernedVaultPackageHash = $pkg
+    | (if $owner != "" then .Casper.OwnerPublicKeyHex = $owner else . end)
+    | .Casper.AllowServerKeyCoSign = (.Casper.AllowServerKeyCoSign // false)
+    | .Staking.Allowlist = ($allow | split(",") | map(select(. != "")))
+    | .Staking.BondCspr = (if $bond > 0 or (.Staking | has("BondCspr") | not) then $bond else .Staking.BondCspr end)
+    | .Dashboard.CsprClickAppId = $appid
+  ' > "$TMP"
+  mv "$TMP" "$AGENT_CFG"
+else
+  echo "WARNING: neither python3 nor jq found — cannot merge into $AGENT_CFG; writing it fresh." >&2
+  if [ -f "$AGENT_CFG" ]; then
+    cp "$AGENT_CFG" "$AGENT_CFG.bak"
+    echo "WARNING: existing file backed up to $AGENT_CFG.bak — re-apply any custom values (e.g. your own CsprCloudAccessKey) by hand." >&2
+  fi
+  # Build the allowlist JSON array.
+  ALLOW_JSON=""
+  if [ -n "$VALIDATORS" ]; then
+    IFS=',' read -ra VS <<< "$VALIDATORS"
+    for v in "${VS[@]}"; do ALLOW_JSON="${ALLOW_JSON}\"$v\","; done
+    ALLOW_JSON="${ALLOW_JSON%,}"
+  fi
+  cat > "$AGENT_CFG" <<EOF
 {
   "Casper": {
-    "CsprCloudAccessKey": "$CSPR_KEY",
+    "CsprCloudAccessKey": "$PUBLIC_TESTNET_KEY",
     "GovernedVaultPackageHash": "$PKG",
     "OwnerPublicKeyHex": "$OWNER",
     "AllowServerKeyCoSign": false
@@ -111,6 +172,7 @@ cat > "$AGENT_CFG" <<EOF
   "Dashboard": { "CsprClickAppId": "$APPID" }
 }
 EOF
+fi
 
 echo ""
 echo "✅ Vault live and armed."

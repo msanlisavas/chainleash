@@ -5,18 +5,25 @@
 #
 # Then: dashboard + API at http://localhost:5179, health at http://localhost:5179/health,
 # signal provider at http://localhost:5080. Secrets are MOUNTED read-only, never baked in.
+# Ports bind to 127.0.0.1 by default; set BIND_ADDR=0.0.0.0 in .env to expose on the network.
 services:
   signal-provider:
     build:
       context: .
       dockerfile: backend/ChainLeash.SignalProvider/Dockerfile
     ports:
-      - "5080:5080"
+      - "${BIND_ADDR:-127.0.0.1}:5080:5080"
     environment:
       - ASPNETCORE_URLS=http://+:5080
       - X402__CsprCloudAccessKey=${CSPR_CLOUD_KEY:-55f79117-fc4d-4d60-9956-65423f39a06a}
       - X402__PayToAccountHash=${X402_PAY_TO:-5bc1cf012c678676ff14c3cd3d2d72ac19d17819d448de4795f7bf1618bfd232}
+      # bind payment proofs to YOUR agent's account hash when driving your own vault
+      - X402__ExpectedPayerAccountHash=${X402_EXPECTED_PAYER:-11b5fdcc0b9653c5d67891c675d1548193779b7ff0a9c942c03f7e6752b52aeb}
       - X402__PriceMotes=${X402_PRICE_MOTES:-2500000000}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5080/ >/dev/null"]
+      interval: 30s
+      start_period: 20s
     restart: unless-stopped
 
   agent:
@@ -24,23 +31,33 @@ services:
       context: .
       dockerfile: backend/ChainLeash.Agent/Dockerfile
     depends_on:
-      - signal-provider
+      signal-provider:
+        condition: service_healthy
     ports:
-      - "5179:5179"
+      - "${BIND_ADDR:-127.0.0.1}:5179:5179"
     environment:
       - ASPNETCORE_URLS=http://+:5179
       - Casper__CsprCloudAccessKey=${CSPR_CLOUD_KEY:-55f79117-fc4d-4d60-9956-65423f39a06a}
       - Casper__GovernedVaultPackageHash=${VAULT_PKG:-hash-f5600a9fcca977de4d2ba259a02ecc9ec5c2256022080b7824cd97fcf5c96591}
       - Casper__OwnerPublicKeyHex=${OWNER_PUBKEY:-011A493f54caDeC630682aA2c64A40d0569b9c3A924876C010cFE27735162654B5}
       - Casper__AgentSecretKeyPath=/secrets/agent/secret_key.pem
-      - Casper__HumanSecretKeyPath=/secrets/human/secret_key.pem
       - Agent__DataPath=/data/feed.json
       - X402__SignalUrl=http://signal-provider:5080/rate
+      # the x402 provider's PUBLIC key, passed as hex (a file mount would trap fresh
+      # clones: Docker creates a directory for a missing host file, breaking keygen later).
+      # Without it the agent can't verify the challenge's payTo and pay-to-think disables.
+      - X402__ProviderPubKeyHex=${X402_PROVIDER_PUBKEY:-011A493f54caDeC630682aA2c64A40d0569b9c3A924876C010cFE27735162654B5}
     volumes:
-      # the agent signs with its OWN key; mount it (and the dev-only human key) read-only
-      - ./spike/ChainLeash.Spike/secrets:/secrets:ro
+      # the agent signs with its OWN key only — the owner key never touches the server
+      # (enabling the dev-only server-key fallback? mount your own key and set Casper__HumanSecretKeyPath)
+      - ./spike/ChainLeash.Spike/secrets/agent:/secrets/agent:ro
       # persist the audit feed across restarts
       - chainleash-data:/data
+    healthcheck:
+      # 503 = chain unreachable but the process is fine — still alive
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5179/health | grep -qE \"200|503\""]
+      interval: 30s
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

@@ -8,6 +8,9 @@
 backend/ChainLeash.Agent/wwwroot
 **/data
 **/secrets
+**/appsettings.local.json
+**/*.local.json
+.env
 *.pem
 *.wasm
 docs/superpowers

@@ -50,6 +50,14 @@ function Run-Spike([string[]]$cmdArgs) {
   finally { Pop-Location }
 }
 
+# Every mutating step must report on-chain success (the spike prints `EXECUTED IsSuccess=True`;
+# its exit code is 0 even on REJECTED/timeout) — otherwise abort before claiming the vault is armed.
+function Invoke-Step([string[]]$cmdArgs) {
+  $out = Run-Spike $cmdArgs
+  Write-Host $out
+  if ($out -notmatch 'IsSuccess=True') { throw "$($cmdArgs[0]) did not report on-chain success — aborting; the vault is NOT fully armed." }
+}
+
 Write-Host "==> Building spike harness..." -ForegroundColor Cyan
 Push-Location $spikeDir; try { dotnet build -clp:ErrorsOnly | Out-Null } finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { throw "spike build failed — fix the build before onboarding (later steps run with --no-build)." }
@@ -70,36 +78,36 @@ Write-Host "    package: $pkg" -ForegroundColor Green
 
 # 3) Initialize (agent, owner, per-action cap).
 Write-Host "==> [2/6] Initializing (cap = $CapCspr CSPR)..." -ForegroundColor Cyan
-Write-Host (Run-Spike @('vault-init', $pkg, "$(Motes $CapCspr)"))
+Invoke-Step @('vault-init', $pkg, "$(Motes $CapCspr)")
 
 # 4) Arm the validator allowlist.
 if ($Validators.Count -eq 0) { Write-Warning "no -Validators given; the agent will have an empty allowlist and stay idle." }
 foreach ($v in $Validators) {
   Write-Host "==> [3/6] Allowlisting validator $($v.Substring(0,10))..." -ForegroundColor Cyan
-  Write-Host (Run-Spike @('vault-set-validator', $pkg, $v, 'true'))
+  Invoke-Step @('vault-set-validator', $pkg, $v, 'true')
 }
 
 # 5) Optional: fund the vault.
 if ($DepositCspr -gt 0) {
   Write-Host "==> [4/6] Depositing $DepositCspr CSPR into the vault..." -ForegroundColor Cyan
-  Write-Host (Run-Spike @('vault-deposit', $pkg, "$(Motes $DepositCspr)"))
+  Invoke-Step @('vault-deposit', $pkg, "$(Motes $DepositCspr)")
 }
 
 # 6) Optional: post the agent's slashable bond.
 if ($BondCspr -gt 0) {
   Write-Host "==> [5/6] Posting $BondCspr CSPR slashable bond..." -ForegroundColor Cyan
-  Write-Host (Run-Spike @('vault-bond', $pkg, "$(Motes $BondCspr)"))
+  Invoke-Step @('vault-bond', $pkg, "$(Motes $BondCspr)")
 }
 
 # Decentralization controls: per-validator concentration cap (opt-in) + anti-thrash cooldown
 # (on by default) — so a new vault isn't running the weakest posture.
 if ($MaxPerValidatorCspr -gt 0) {
   Write-Host "==> Setting per-validator cap = $MaxPerValidatorCspr CSPR..." -ForegroundColor Cyan
-  Write-Host (Run-Spike @('vault-set-maxval', $pkg, "$(Motes $MaxPerValidatorCspr)"))
+  Invoke-Step @('vault-set-maxval', $pkg, "$(Motes $MaxPerValidatorCspr)")
 }
 if ($CooldownSec -gt 0) {
   Write-Host "==> Setting action cooldown = $CooldownSec s..." -ForegroundColor Cyan
-  Write-Host (Run-Spike @('vault-set-interval', $pkg, "$($CooldownSec * 1000)"))
+  Invoke-Step @('vault-set-interval', $pkg, "$($CooldownSec * 1000)")
 }
 
 # 7) Point the agent at the new vault (merge into appsettings.local.json — keeps secrets).
@@ -114,9 +122,15 @@ if (Test-Path $agentCfg) { $cfg = Get-Content $agentCfg -Raw | ConvertFrom-Json 
 if (-not $cfg.ContainsKey('Casper'))    { $cfg['Casper'] = @{} }
 if (-not $cfg.ContainsKey('Staking'))   { $cfg['Staking'] = @{} }
 if (-not $cfg.ContainsKey('Dashboard')) { $cfg['Dashboard'] = @{} }
+# NEVER copy a private CSPR.cloud key into this file — preserve whatever is set; only when
+# absent, seed the shared PUBLIC testnet key (get your own at console.cspr.cloud).
+if (-not $cfg['Casper'].ContainsKey('CsprCloudAccessKey')) { $cfg['Casper']['CsprCloudAccessKey'] = '55f79117-fc4d-4d60-9956-65423f39a06a' }
 $cfg['Casper']['GovernedVaultPackageHash'] = $pkg
 if ($OwnerPublicKeyHex) { $cfg['Casper']['OwnerPublicKeyHex'] = $OwnerPublicKeyHex }
+if (-not $cfg['Casper'].ContainsKey('AllowServerKeyCoSign')) { $cfg['Casper']['AllowServerKeyCoSign'] = $false }
 $cfg['Staking']['Allowlist'] = $Validators
+# Bond target: record what was just bonded; a re-run without -BondCspr keeps the existing target.
+if ($BondCspr -gt 0 -or -not $cfg['Staking'].ContainsKey('BondCspr')) { $cfg['Staking']['BondCspr'] = $BondCspr }
 $cfg['Dashboard']['CsprClickAppId'] = $CsprClickAppId
 $cfg | ConvertTo-Json -Depth 8 | Set-Content $agentCfg -Encoding utf8
 
