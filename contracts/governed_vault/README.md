@@ -22,16 +22,23 @@ not public key), so the per-action cap and validator allowlist are **fully chain
 ## Entry points
 
 **Agent (capped + allowlisted, chain-rejected otherwise):**
-`delegate`, `undelegate`, `redelegate`, `propose_material`, `deposit_bond`, and
-`tighten_cap` (the agent may only *lower* its own cap, never raise it).
+`delegate`, `undelegate`, `redelegate`, `propose_material` (cooldown applies — a hijacked
+agent can't spam the queue), `deposit_bond`, and `tighten_cap` (the agent may only *lower*
+its own cap, never raise it).
 
-**Owner:** `approve_material`, `raise_cap`, `set_validator`, `set_paused`
+**Owner:** `approve_material`, `reject_material` (resolve a pending proposal *without*
+executing it — works even while paused), `raise_cap`, `set_validator`, `set_paused`
 (kill-switch), `set_max_per_validator`, `set_action_interval`, `record_violation`,
 `slash_bond`, `return_bond`, `withdraw`, `transfer_ownership`, `set_agent`.
 
-**Installer:** `init` (constructor, auto), `initialize(agent, owner, value_cap)`.
+**Installer:** `init` (constructor, auto), `initialize(agent, owner, value_cap)` —
+rejects `agent == owner` (the roles must never collapse into one key; `set_agent` and
+`transfer_ownership` enforce the same).
 
-**Payable:** `deposit_treasury`, `deposit_bond` (via Odra's `proxy_caller`).
+**Payable:** `deposit_treasury` (anyone), `deposit_bond` (via Odra's `proxy_caller`) —
+the bond may only be *opened* by the agent or owner, and while it is outstanding only the
+recorded holder may top it up, so nobody can overwrite `bond_holder` and capture the
+pooled bond on `return_bond`.
 
 **Views (gas-free):** `get_agent`, `get_owner`, `value_cap`, `bond`, `violations`,
 `is_validator_allowed`, `delegated_to`, `committed_to`, `is_paused`, `max_per_validator`,
@@ -54,7 +61,10 @@ not public key), so the per-action cap and validator allowlist are **fully chain
 Error codes: `NotInitialized(1) NotAgent(2) NotOwner(3) OverCap(4) ValidatorNotAllowed(5)
 NoSuchProposal(6) ProposalAlreadyResolved(7) AlreadyInitialized(8) CapNotLower(9)
 InsufficientFreeBalance(10) Paused(11) PerValidatorCapExceeded(12) RateLimited(13)
-NotInstaller(14)`.
+NotInstaller(14) ExceedsCommitted(15) CapNotHigher(16) UnauthorizedBondDeposit(17)
+AgentOwnerSame(18)`.
+(On-chain these surface UNSHIFTED as `User error: <code>` — e.g. `OverCap` = 4. Odra
+reserves 64536+ for its own framework errors, e.g. 64658 = MissingArg.)
 
 ## Build / test
 
@@ -62,7 +72,7 @@ NotInstaller(14)`.
 Linux container (see the [RUNBOOK](../../RUNBOOK.md)):
 
 ```
-cargo odra test          # 26/26
+cargo test               # 39/39
 cargo odra build         # -> wasm/GovernedVault.wasm (~295 KB)
 ```
 

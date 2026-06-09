@@ -1,11 +1,10 @@
 [package]
 edition = "2021"
 name = "governed_vault"
-version = "0.1.0"
+version = "0.6.0"
 
 [dependencies]
 odra = { version = "2.7.0", features = [], default-features = false }
-odra-casper-livenet-env = { version = "2.7.0", optional = true }
 
 [dev-dependencies]
 odra-test = { version = "2.7.0", features = [], default-features = false }
@@ -15,7 +14,6 @@ odra-build = { version = "2.7.0", features = [], default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 odra-build = { version = "2.7.0", features = [], default-features = false }
-odra-cli = { version = "2.7.0", features = [], default-features = false }
 
 # Native Casper auction call for `redelegate` (Odra 2.7 doesn't wrap it). wasm-only;
 # the OdraVM test backend uses a stub and the real path is verified on testnet.
@@ -31,20 +29,6 @@ test = false
 name = "governed_vault_build_schema"
 path = "bin/build_schema.rs"
 test = false
-
-[[bin]]
-name = "governed_vault_cli"
-path = "bin/cli.rs"
-test = false
-
-[[bin]]
-name = "governed_vault_livenet"
-path = "bin/governed_vault_livenet.rs"
-required-features = ["livenet"]
-test = false
-
-[features]
-livenet = ["odra-casper-livenet-env"]
 
 [profile.release]
 codegen-units = 1
