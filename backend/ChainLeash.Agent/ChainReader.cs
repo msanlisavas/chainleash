@@ -61,8 +61,12 @@ public sealed class ChainReader
             {
                 var msg = err.GetProperty("message").GetString() ?? "";
                 var code = err.TryGetProperty("code", out var c) ? c.GetInt32() : 0;
+                // The node buries the discriminating detail in `data`: an unset dictionary
+                // key surfaces as -32003 "Query failed" + data "...value was not found in
+                // the global state" (verified live) — message alone can't tell it apart.
+                if (err.TryGetProperty("data", out var data)) msg = $"{msg}: {data.ToString()}";
                 var notFound = msg.Contains("ValueNotFound", StringComparison.OrdinalIgnoreCase)
-                            || msg.Contains("value not found", StringComparison.OrdinalIgnoreCase)
+                            || msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
                             || msg.Contains("Failed to find", StringComparison.OrdinalIgnoreCase);
                 throw new ChainRpcException(method, $"{msg} ({code})", notFound);
             }
