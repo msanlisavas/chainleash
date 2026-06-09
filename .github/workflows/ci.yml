@@ -32,7 +32,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          # Node 24 ships npm 11, which wrote package-lock.json — npm 10 (Node 20/22)
+          # rejects npm 11's nested lock entries with a bogus "missing from lock file".
+          node-version: '24'
           cache: npm
           cache-dependency-path: frontend/dashboard/package-lock.json
       - uses: browser-actions/setup-chrome@c785b87e244131f27c9f19c1a33e2ead956ab7ce # v1
