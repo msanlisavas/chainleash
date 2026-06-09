@@ -4,13 +4,19 @@ import { Injectable, signal } from '@angular/core';
 export interface AppConfig {
   chainName: string;
   packageHash: string;
+  explorerBaseUrl?: string; // server-configured block-explorer base (single source of truth)
   ownerPublicKey: string | null;
   csprClickAppId: string;
   walletCoSignEnabled: boolean;
   allowServerKeyCoSign: boolean;
   readOnly: boolean;
+  x402Enabled?: boolean;
 }
 
+// Pinned, versioned SDK build. Subresource-integrity pinning was tried and REVERTED:
+// SRI requires `crossorigin` + an Access-Control-Allow-Origin header, and cdn.cspr.click
+// serves none — the browser then blocks the script entirely (verified empirically).
+// Compensating control: the server's CSP restricts script-src to 'self' + this CDN.
 const CSPRCLICK_CDN = 'https://cdn.cspr.click/ui/v2.0.0/csprclick-client-2.0.0.js';
 
 /**
@@ -26,10 +32,14 @@ export class WalletService {
   /** SDK readiness: 'idle' before init, 'loading', 'ready', or 'unavailable' on failure. */
   status = signal<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
 
+  private cfg: AppConfig | null = null;
+  private connectAborted = false;
+
   private get sdk(): any { return (window as any).csprclick; }
 
   /** Load + initialize the CSPR.click client with the server-supplied appId. Idempotent. */
   async init(cfg: AppConfig): Promise<void> {
+    this.cfg = cfg;
     if (this.status() === 'ready' || this.status() === 'loading') return;
     this.status.set('loading');
 
@@ -52,21 +62,36 @@ export class WalletService {
       this.refreshActiveKey(); // pick up an already-connected session after a reload
       this.status.set('ready');
     } catch {
-      this.status.set('unavailable'); // wallet/SDK not present — UI falls back gracefully
+      this.status.set('unavailable'); // SDK didn't load (offline/blocked CDN) — retry() re-attempts
     }
+  }
+
+  /** Re-attempt a failed SDK load (e.g. the CDN was briefly unreachable). */
+  async retry(): Promise<void> {
+    if (this.status() !== 'unavailable' || !this.cfg) return;
+    document.querySelector(`script[src="${CSPRCLICK_CDN}"]`)?.remove(); // a failed tag blocks loadScript
+    this.status.set('idle');
+    await this.init(this.cfg);
   }
 
   /** Open the CSPR.click sign-in modal; resolves once an account is active (or null). */
   async connect(): Promise<string | null> {
     if (this.status() !== 'ready') return null;
+    this.connectAborted = false;
     this.sdk.signIn();
     // signed_in fires via wireEvents(); also poll briefly as a fallback.
-    for (let i = 0; i < 60 && !this.activeKey(); i++) {
+    for (let i = 0; i < 60 && !this.activeKey() && !this.connectAborted; i++) {
       await new Promise(r => setTimeout(r, 500));
       this.refreshActiveKey();
     }
     return this.activeKey();
   }
+
+  /** Abort a pending connect() wait (the user closed/ignored the sign-in modal). */
+  cancelConnect(): void { this.connectAborted = true; }
+
+  /** True when the last connect() wait ended because the user cancelled it. */
+  wasConnectCancelled(): boolean { return this.connectAborted; }
 
   async disconnect(): Promise<void> {
     try { await this.sdk?.signOut?.(); } catch { /* ignore */ }
