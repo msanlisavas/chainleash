@@ -5,7 +5,7 @@
 # 1) Build the Angular dashboard. angular.json writes the bundle into
 #    backend/ChainLeash.Agent/wwwroot (relative to the project), so it lands at
 #    /src/backend/ChainLeash.Agent/wwwroot in this stage.
-FROM node:20-alpine AS dashboard
+FROM node:24-alpine AS dashboard
 WORKDIR /src/frontend/dashboard
 COPY frontend/dashboard/package*.json ./
 RUN npm ci
