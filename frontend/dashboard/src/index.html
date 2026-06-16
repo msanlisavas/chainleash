@@ -6,12 +6,17 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Live dashboard for a bonded autonomous CSPR staking agent: per-action cap, validator allowlist, kill-switch and human co-sign — all enforced by a Casper contract.">
-  <meta name="theme-color" content="#0c0f16">
+  <meta name="theme-color" content="#0a0c10">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <link rel="manifest" href="site.webmanifest">
+  <link rel="preload" as="font" type="font/woff2" href="fonts/ibm-plex-mono-latin-600-normal.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="fonts/ibm-plex-sans-latin-400-normal.woff2" crossorigin>
+  <!-- Paint the graphite base before the stylesheet loads (inlineCritical is off for CSP),
+       so there's no white flash. CSP allows inline styles. -->
+  <style>html,body{margin:0;background:#0a0c10;color:#e7ecf3}</style>
 </head>
 <body>
   <!-- CSPR.click mounts its wallet UI (sign-in modal) here; see WalletService. -->

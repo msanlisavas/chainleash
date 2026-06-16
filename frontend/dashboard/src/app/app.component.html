@@ -1,153 +1,200 @@
 @let s = state();
 @let pending = pendingProposals();
 
-<header class="topbar">
-  <div class="brand">
-    <span class="logo" aria-hidden="true">⛓️</span>
-    <div>
-      <h1>CHAINLEASH</h1>
-      <p>Controlled autonomy the chain enforces — auditable per decision.</p>
+<a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100]
+                       focus:px-4 focus:py-2 focus:rounded-lg focus:bg-ink focus:text-graphite focus:font-mono focus:text-mini">
+  Skip to content
+</a>
+
+<app-nav-bar
+  [linkState]="link()"
+  [linkLabel]="linkLabel()"
+  [pkgShort]="short(s?.packageHash)"
+  [pkgUrl]="explorerBase() + '/contract-package/' + (s?.packageHash ?? '')"
+  [pending]="pending.length"
+  [readOnly]="config()?.readOnly ?? false" />
+
+<main id="main">
+  <app-hero [paused]="s?.paused ?? false" [awaiting]="pending.length" [live]="link() === 'live'" />
+
+  <app-how-it-works />
+
+  <app-guarantee />
+
+  <!-- ───────────────────────── LIVE CONSOLE ───────────────────────── -->
+  <section id="console" class="mx-auto max-w-[1180px] px-5 py-14 md:py-16 scroll-mt-16">
+    <div class="mb-8">
+      <div class="flex flex-wrap items-center gap-3">
+        <p class="eyebrow">Live console</p>
+        @if (s?.stale) {
+          <span class="pill pill-warn" title="The last chain read failed (rate limit or outage) — values shown are the last known good state.">chain read stale</span>
+        }
+      </div>
+      <h2 class="mt-2 font-mono font-semibold text-[clamp(1.5rem,3vw,2rem)] tracking-[-0.01em]">
+        The leash, running live on testnet.
+      </h2>
+      <p class="mt-3 text-mute text-cap font-mono leading-relaxed">
+        commission ≤ <b class="text-steel">{{ s?.maxCommissionPercent ?? '—' }}%</b> ·
+        per-validator cap <b class="text-steel">{{ s?.maxPerValidatorCspr ? (fmt(s?.maxPerValidatorCspr) + ' CSPR') : 'unlimited' }}</b> ·
+        vault total balance <b class="text-steel">{{ fmt(s?.totalBalanceCspr) }} CSPR</b> — all read live from chain.
+      </p>
     </div>
-  </div>
-  <div class="status">
-    @if (pending.length > 0) {
-      <a class="pending-chip" href="#proposals">⚠ {{ pending.length }} awaiting co-sign</a>
-      <span class="sr-only" role="status">{{ pending.length }} material proposals awaiting the owner's co-sign</span>
+
+    <!-- Banners — one tonal family: steel = observer, red = enforcement, amber = infra. -->
+    @if (config()?.readOnly) {
+      <div class="panel mb-5 px-4 py-3 text-cap flex items-start gap-2.5 border-l-2 border-l-steel bg-steel/5" role="status">
+        <span aria-hidden="true">◎</span>
+        <span class="text-steel"><b class="text-ink">Observer mode</b> — this agent has no signing key, so it reads the live vault but never acts. Deploy your own vault (see the README) to drive the agent.</span>
+      </div>
     }
-    @if (s?.stale) {
-      <span class="stale-chip" role="status" title="The last chain read failed (rate limit or outage) — values shown are the last known good state.">chain read stale</span>
+    @if (s?.paused) {
+      <div class="panel mb-5 px-4 py-3 text-note flex items-start gap-2.5 border-l-2 border-l-red bg-red/5" role="alert">
+        <span aria-hidden="true">⏻</span>
+        <span class="text-ink"><b>Kill-switch engaged</b> — the owner has paused the agent. Every agent move is rejected on-chain until unpaused.</span>
+      </div>
     }
-    <span class="dot" [class.on]="link() === 'live'" [class.warn]="link() === 'reconnecting'" aria-hidden="true"></span>
-    <span role="status">{{ linkLabel() }}</span>
-    @if (s) { <a class="pkg" href="{{ explorerBase() }}/contract-package/{{ s.packageHash }}" target="_blank" rel="noopener"
-                 title="The GovernedVault contract package on the block explorer">vault {{ short(s.packageHash) }}</a> }
-  </div>
-</header>
+    @if (loadError() && !s) {
+      <div class="panel mb-5 px-4 py-3 text-cap flex items-start gap-2.5 border-l-2 border-l-amber bg-amber/5" role="alert">
+        <span aria-hidden="true">△</span>
+        <span class="text-amber">Can’t reach the agent API. Is the agent running? Retrying automatically…</span>
+      </div>
+    }
 
-@if (config()?.readOnly) {
-  <div class="banner info" role="status">👁 Observer mode — this agent has no signing key, so it reads the live vault but never acts. Deploy your own vault (see the README) to drive the agent.</div>
-}
-@if (s?.paused) {
-  <div class="banner paused" role="alert">⏸ KILL-SWITCH ENGAGED — the owner has paused the agent. Every agent move is rejected on-chain until unpaused.</div>
-}
-@if (loadError() && !s) {
-  <div class="banner error" role="alert">Can't reach the agent API. Is the agent running? Retrying automatically…</div>
-}
+    <!-- Stat cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-3 gap-3.5">
+      <app-stat-card label="Per-action cap" [value]="fmt(s?.capCspr)" unit="CSPR"
+        hint="The chain rejects any single agent move above this amount." />
+      <app-stat-card label="Free (deployable)" [value]="fmt(s?.freeBalanceCspr)" unit="CSPR"
+        hint="Liquid vault CSPR the agent may stake (total minus the escrowed bond)." />
+      <app-stat-card label="Slashable bond" [value]="fmt(s?.bondCspr)" unit="CSPR"
+        hint="The agent operator's collateral, escrowed in the vault — forfeited on a violation." />
+      <app-stat-card label="x402 paid-to-think" [value]="fmt(s?.x402SpentCspr ?? 0)" unit="CSPR"
+        hint="What the agent has paid for premium risk reads — a real Casper transfer per decision." />
+      <app-stat-card label="On-chain actions" [value]="(s?.actions ?? 0).toString()"
+        hint="Signed on-chain moves this run." />
+      <app-stat-card label="Violations" [value]="(s?.violations ?? 0).toString()"
+        hint="Policy violations recorded on-chain by the owner."
+        [accent]="(s?.violations ?? 0) > 0 ? 'red' : 'steel'" />
+    </div>
 
-<section class="stats">
-  <div class="card" title="The chain rejects any single agent move above this amount"><span class="label">Per-action cap</span><span class="value">{{ fmt(s?.capCspr) }} <em>CSPR</em></span></div>
-  <div class="card" title="Liquid vault CSPR the agent may stake (total minus the escrowed bond)"><span class="label">Free (deployable)</span><span class="value">{{ fmt(s?.freeBalanceCspr) }} <em>CSPR</em></span></div>
-  <div class="card" title="The agent operator's collateral, escrowed in the vault — forfeited on a violation"><span class="label">Slashable bond</span><span class="value">{{ fmt(s?.bondCspr) }} <em>CSPR</em></span></div>
-  <div class="card" title="What the agent has paid for premium risk reads — a real Casper transfer per decision"><span class="label">x402 paid-to-think</span><span class="value">{{ fmt(s?.x402SpentCspr ?? 0) }} <em>CSPR</em></span></div>
-  <div class="card" title="Signed on-chain moves this run"><span class="label">On-chain actions</span><span class="value">{{ s?.actions ?? 0 }}</span></div>
-  <div class="card" title="Policy violations recorded on-chain by the owner"><span class="label">Violations</span><span class="value">{{ s?.violations ?? 0 }}</span></div>
-</section>
+    <!-- Feed + side -->
+    <div class="grid lg:grid-cols-[1.6fr_1fr] gap-4 items-start mt-5">
+      <section class="panel p-5">
+        <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
+          Live audit feed
+          <small class="text-mute font-normal text-meta">every agent decision, on-chain · times in your local timezone</small>
+        </h3>
+        <ul role="log" aria-live="polite" aria-relevant="additions" aria-label="Agent decision feed"
+            class="list-none m-0 p-0 lg:max-h-[68vh] lg:overflow-y-auto">
+          @for (e of events(); track e.iso ?? e.tick + '-' + e.kind) {
+            <li class="flex items-baseline gap-2.5 py-2.5 border-b border-line last:border-0 text-note anim-rise">
+              <span class="text-mute font-mono text-meta shrink-0 cursor-help" [title]="timeTitle(e)">{{ timeOf(e) }}</span>
+              <span class="badge shrink-0" [class]="kindClass(e.kind)">{{ e.kind }}</span>
+              <span class="flex-1 text-ink/90">{{ e.message }}</span>
+              @if (txLink(e.txHash); as url) {
+                <a class="inline-flex items-center text-steel hover:text-ink hover:underline text-mini whitespace-nowrap shrink-0 py-1 px-1 -my-1"
+                   [href]="url" target="_blank" rel="noopener" aria-label="View transaction on the block explorer">↗ tx</a>
+              }
+            </li>
+          } @empty {
+            <li class="text-mute text-center py-8">Waiting for the first agent decision…</li>
+          }
+        </ul>
+      </section>
 
-<p class="policy">
-  Policy: commission ≤ <b>{{ s?.maxCommissionPercent ?? '—' }}%</b> ·
-  per-validator cap <b>{{ s?.maxPerValidatorCspr ? (fmt(s?.maxPerValidatorCspr) + ' CSPR') : 'unlimited' }}</b> ·
-  vault liquid balance <b>{{ fmt(s?.totalBalanceCspr) }} CSPR</b> — all read live from chain.
-</p>
+      <aside class="flex flex-col gap-4">
+        <section class="panel p-5">
+          <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
+            Allowlisted validators
+            <small class="text-mute font-normal text-meta">live CSPR.cloud metrics</small>
+          </h3>
+          @for (v of s?.validators ?? []; track v.publicKey) {
+            <div class="border rounded-xl px-3 py-2.5 mb-2.5 last:mb-0"
+                 [class]="v.compliant ? 'border-line' : 'border-red/45 bg-red/5'">
+              <div class="flex items-center justify-between gap-2">
+                <a [href]="explorerBase() + '/validator/' + v.publicKey" target="_blank" rel="noopener"
+                   class="font-mono text-cap text-steel hover:text-ink hover:underline py-0.5"
+                   title="View validator on the block explorer">{{ short(v.publicKey) }}</a>
+                <span class="pill" [class]="v.compliant ? 'pill-ok' : 'pill-bad'">{{ v.compliant ? 'in policy' : 'off policy' }}</span>
+              </div>
+              <div class="flex flex-wrap gap-x-3.5 gap-y-1 mt-2 text-mute text-mini font-mono">
+                <span>commission <b class="text-ink">{{ v.feePercent }}%</b></span>
+                <span>{{ v.active ? 'active' : 'inactive' }}</span>
+                @if (v.delegatedCspr > 0) { <span>committed <b class="text-ink">{{ fmt(v.delegatedCspr) }}</b> CSPR</span> }
+              </div>
+            </div>
+          } @empty {
+            <p class="text-mute text-note text-center py-3">No validators loaded yet.</p>
+          }
+        </section>
 
-<main class="grid">
-  <section class="feed panel">
-    <h2>Live audit feed <small>every agent decision, on-chain · times in your local timezone</small></h2>
-    <ul role="log" aria-live="polite" aria-relevant="additions" aria-label="Agent decision feed">
-      @for (e of events(); track e) {
-        <li>
-          <span class="time" [title]="timeTitle(e)">{{ timeOf(e) }}</span>
-          <span class="badge" [class]="kindClass(e.kind)">{{ e.kind }}</span>
-          <span class="msg">{{ e.message }}</span>
-          @if (txLink(e.txHash); as url) { <a class="tx" [href]="url" target="_blank" rel="noopener" aria-label="View transaction on the block explorer">↗ tx</a> }
-        </li>
-      } @empty {
-        <li class="empty">Waiting for the agent to think…</li>
-      }
-    </ul>
+        <section class="panel p-5 transition-shadow" id="proposals"
+                 [class.attention]="pending.length > 0">
+          <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
+            Material proposals
+            <small class="text-mute font-normal text-meta">co-signed in the owner's own wallet</small>
+          </h3>
+
+          @if (config()?.walletCoSignEnabled) {
+            <div class="flex items-center gap-2.5 flex-wrap mb-3 pb-3 border-b border-line text-mini">
+              @if (wallet.activeKey(); as wk) {
+                <span class="pill" [class]="wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase() ? 'pill-ok' : 'pill-warn'">
+                  {{ wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase() ? 'owner wallet connected' : 'wrong account' }}
+                </span>
+                <span class="font-mono text-steel">{{ short(wk) }}</span>
+              } @else if (walletConnecting()) {
+                <span class="text-mute">waiting for wallet sign-in…</span>
+                <button class="text-steel hover:text-ink underline py-1 px-1" (click)="cancelConnect()">cancel</button>
+              } @else if (wallet.status() === 'ready') {
+                <button class="btn btn-ghost py-1.5 px-3 text-mini" (click)="connectWallet()">Connect owner wallet</button>
+              } @else if (wallet.status() === 'unavailable') {
+                <span class="text-mute">wallet SDK didn’t load (offline or blocked)</span>
+                <button class="text-steel hover:text-ink underline py-1 px-1" (click)="retryWallet()">retry</button>
+              } @else {
+                <span class="text-mute">loading wallet…</span>
+              }
+              <span class="text-mute font-mono ml-auto cursor-help" [title]="config()?.ownerPublicKey ?? ''">owner {{ short(config()?.ownerPublicKey ?? '') }}</span>
+            </div>
+          }
+
+          @for (p of pending; track p.id) {
+            <div class="border border-line rounded-xl px-3 py-3 mb-2.5 last:mb-0">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-note">#{{ p.id }} {{ p.undelegate ? 'undelegate' : 'delegate' }} <b class="font-mono">{{ fmt(p.amountCspr) }} CSPR</b></span>
+                @if (txLink(p.txHash); as url) {
+                  <a class="inline-flex items-center text-steel hover:text-ink py-1 px-1.5 -my-1 -mr-1" [href]="url" target="_blank" rel="noopener" aria-label="View proposal transaction on the block explorer">↗</a>
+                }
+              </div>
+              <div class="font-mono text-mini text-mute mt-1">→ {{ short(p.validator) }}</div>
+              @if (config()?.walletCoSignEnabled) {
+                <button class="btn btn-primary w-full mt-3"
+                        (click)="coSignWallet(p)"
+                        [disabled]="coSigning() !== null || coSignBlocked() !== null"
+                        [attr.aria-busy]="coSigning() === p.id">
+                  @if (coSigning() === p.id && coSignPhase() === 'wallet') { <span class="spin anim-spin" aria-hidden="true"></span> approve in your wallet… }
+                  @else if (coSigning() === p.id && coSignPhase() === 'confirm') { <span class="spin anim-spin" aria-hidden="true"></span> confirming on-chain (≈1 min)… }
+                  @else { Co-sign in wallet (owner) }
+                </button>
+                @if (coSigning() === p.id && coSignPhase() === 'wallet' && walletConnecting()) {
+                  <button class="btn btn-ghost w-full mt-2" (click)="cancelConnect()">cancel sign-in</button>
+                }
+                @if (coSignBlocked(); as why) { <p class="text-mute text-meta mt-2">{{ why }}</p> }
+              }
+              @if (config()?.allowServerKeyCoSign) {
+                <button class="btn btn-ghost w-full mt-2 text-mini" (click)="approveServerKey(p)" [disabled]="coSigning() !== null">dev: server-key co-sign</button>
+              }
+            </div>
+          } @empty {
+            <p class="text-mute text-note text-center py-3">No moves awaiting co-sign — the agent is operating within its leash.</p>
+          }
+          @if (coSignOk()) { <p class="text-green text-mini mt-3 font-semibold" role="status">✓ {{ coSignOk() }}</p> }
+          @if (coSignError()) { <p class="text-amber text-mini mt-3" role="alert">Co-sign failed: {{ coSignError() }}</p> }
+        </section>
+      </aside>
+    </div>
   </section>
 
-  <aside class="side">
-    <section class="panel">
-      <h2>Allowlisted validators <small>live CSPR.cloud metrics</small></h2>
-      @for (v of s?.validators ?? []; track v.publicKey) {
-        <div class="validator" [class.breach]="!v.compliant">
-          <div class="row">
-            <a href="{{ explorerBase() }}/validator/{{ v.publicKey }}" target="_blank" rel="noopener" class="vk"
-               title="View validator on the block explorer">{{ short(v.publicKey) }}</a>
-            <span class="pill" [class.ok]="v.compliant" [class.bad]="!v.compliant">{{ v.compliant ? 'in policy' : 'off policy' }}</span>
-          </div>
-          <div class="meta">
-            <span>commission <b>{{ v.feePercent }}%</b></span>
-            <span>{{ v.active ? 'active' : 'inactive' }}</span>
-            @if (v.delegatedCspr > 0) { <span>committed <b>{{ fmt(v.delegatedCspr) }}</b> CSPR</span> }
-          </div>
-        </div>
-      } @empty {
-        <p class="empty">No validators perceived yet.</p>
-      }
-    </section>
-
-    <section class="panel" id="proposals" [class.attention]="pending.length > 0">
-      <h2>Material proposals <small>co-signed in the owner's own wallet</small></h2>
-
-      @if (config()?.walletCoSignEnabled) {
-        <div class="wallet">
-          @if (wallet.activeKey(); as wk) {
-            <span class="pill" [class.ok]="wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase()"
-                  [class.bad]="wk.toLowerCase() !== config()?.ownerPublicKey?.toLowerCase()">
-              {{ wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase() ? 'owner wallet connected' : 'wrong account' }}
-            </span>
-            <span class="vk">{{ short(wk) }}</span>
-          } @else if (walletConnecting()) {
-            <span class="muted">waiting for wallet sign-in…</span>
-            <button class="link" (click)="cancelConnect()">cancel</button>
-          } @else if (wallet.status() === 'ready') {
-            <button class="link" (click)="connectWallet()">Connect owner wallet</button>
-          } @else if (wallet.status() === 'unavailable') {
-            <span class="muted">wallet SDK didn't load (offline or blocked)</span>
-            <button class="link" (click)="retryWallet()">retry</button>
-          } @else {
-            <span class="muted">loading wallet…</span>
-          }
-          <span class="owner" [title]="config()?.ownerPublicKey ?? ''">owner {{ short(config()?.ownerPublicKey ?? '') }}</span>
-        </div>
-      }
-
-      @for (p of pending; track p.id) {
-        <div class="proposal">
-          <div class="row">
-            <span>#{{ p.id }} {{ p.undelegate ? 'undelegate' : 'delegate' }} <b>{{ fmt(p.amountCspr) }} CSPR</b></span>
-            @if (txLink(p.txHash); as url) { <a class="tx" [href]="url" target="_blank" rel="noopener" aria-label="View proposal transaction on the block explorer">↗</a> }
-          </div>
-          <div class="vk">→ {{ short(p.validator) }}</div>
-          @if (config()?.walletCoSignEnabled) {
-            <button (click)="coSignWallet(p)"
-                    [disabled]="coSigning() !== null || coSignBlocked() !== null"
-                    [attr.aria-busy]="coSigning() === p.id">
-              @if (coSigning() === p.id && coSignPhase() === 'wallet') { <span class="spin" aria-hidden="true"></span> approve in your wallet… }
-              @else if (coSigning() === p.id && coSignPhase() === 'confirm') { <span class="spin" aria-hidden="true"></span> confirming on-chain (≈1 min)… }
-              @else { Co-sign in wallet (owner) }
-            </button>
-            @if (coSigning() === p.id && coSignPhase() === 'wallet' && walletConnecting()) {
-              <button class="ghost" (click)="cancelConnect()">cancel sign-in</button>
-            }
-            @if (coSignBlocked(); as why) { <p class="muted blocked">{{ why }}</p> }
-          }
-          @if (config()?.allowServerKeyCoSign) {
-            <button class="ghost" (click)="approveServerKey(p)" [disabled]="coSigning() !== null">dev: server-key co-sign</button>
-          }
-        </div>
-      } @empty {
-        <p class="empty">No moves awaiting co-sign — the agent is operating within its leash.</p>
-      }
-      @if (coSignOk()) { <p class="ok-line" role="status">✓ {{ coSignOk() }}</p> }
-      @if (coSignError()) { <p class="err-line" role="alert">Co-sign failed: {{ coSignError() }}</p> }
-    </section>
-  </aside>
+  <app-deploy />
 </main>
 
-<footer>
-  The agent can rebalance stake within the cap &amp; allowlist, but <b>cannot withdraw</b>,
-  <b>cannot raise its own authority</b>, and forfeits its <b>bond</b> on a violation. The
-  leash is enforced by the Casper contract, not this server — every value above is read live from chain.
-</footer>
+<app-site-footer />

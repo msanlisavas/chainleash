@@ -3,6 +3,13 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import * as signalR from '@microsoft/signalr';
 import { WalletService, AppConfig } from './wallet.service';
+import { NavBarComponent } from './ui/nav-bar.component';
+import { HeroComponent } from './ui/hero.component';
+import { HowItWorksComponent } from './ui/how-it-works.component';
+import { GuaranteeComponent } from './ui/guarantee.component';
+import { StatCardComponent } from './ui/stat-card.component';
+import { DeployComponent } from './ui/deploy.component';
+import { SiteFooterComponent } from './ui/site-footer.component';
 
 interface AuditEvent {
   time: string; tick: number; kind: string; message: string;
@@ -26,7 +33,10 @@ interface FeedState {
 
 @Component({
     selector: 'app-root',
-    imports: [],
+    imports: [
+        NavBarComponent, HeroComponent, HowItWorksComponent,
+        GuaranteeComponent, StatCardComponent, DeployComponent, SiteFooterComponent,
+    ],
     templateUrl: './app.component.html',
     styleUrl: './app.component.scss'
 })

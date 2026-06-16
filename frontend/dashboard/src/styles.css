@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────
+   CHAINLEASH — institutional control console
+   Steel + signal-red on graphite. Red is reserved for ENFORCEMENT only.
+   Display/instrumentation voice = IBM Plex Mono (a control console is a
+   terminal); body = IBM Plex Sans. Self-hosted, latin subset, CSP-safe.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Self-hosted fonts ------------------------------------------------------- */
+@font-face {
+  font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400;
+  font-display: swap; src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500;
+  font-display: swap; src: url("/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600;
+  font-display: swap; src: url("/fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono"; font-style: normal; font-weight: 700;
+  font-display: swap; src: url("/fonts/ibm-plex-mono-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400;
+  font-display: swap; src: url("/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans"; font-style: normal; font-weight: 500;
+  font-display: swap; src: url("/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600;
+  font-display: swap; src: url("/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+}
+
+/* Design tokens ----------------------------------------------------------- */
+@theme {
+  --color-graphite: #0a0c10;   /* page */
+  --color-panel:    #12151c;   /* cards / panels */
+  --color-raised:   #171b24;   /* nested / hovered */
+  --color-line:     #222a36;   /* hairline rules */
+  --color-edge:     #2b3342;   /* lit top edge of a steel panel */
+  --color-steel:    #9aa6b8;   /* the chain / secondary marks */
+  --color-mute:     #7d8797;   /* de-emphasised text — kept ≥4.5:1 on graphite for WCAG AA */
+  --color-ink:      #e7ecf3;   /* primary text */
+  --color-red:      #e5332a;   /* ENFORCEMENT ONLY — fills & borders */
+  --color-redtext:  #ff7a72;   /* legible red for small TEXT on dark/tint (≥4.5:1 AA) */
+  --color-green:    #29c275;   /* in-policy / live / healthy */
+  --color-amber:    #f1c40f;   /* awaiting human co-sign */
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  /* One deliberate type scale (six steps) — used everywhere instead of ad-hoc rem values. */
+  --text-meta: 0.72rem;
+  --text-mini: 0.78rem;
+  --text-cap:  0.82rem;
+  --text-note: 0.88rem;
+  --text-body: 0.95rem;
+  --text-lead: 1.05rem;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Base -------------------------------------------------------------------- */
+@layer base {
+  html { scroll-behavior: smooth; overflow-x: clip; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    /* Steel is the only ambient light. No red wash — red must read as the alarm
+       color the instant it appears (HALTED / off-policy / forfeit-bond), so it
+       never sits in the background. */
+    background:
+      radial-gradient(1200px 560px at 78% -8%, rgba(154, 166, 184, 0.06), transparent 60%),
+      radial-gradient(900px 620px at 12% 108%, rgba(154, 166, 184, 0.035), transparent 55%),
+      var(--color-graphite);
+    background-attachment: fixed;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  ::selection { background: rgba(154, 166, 184, 0.30); color: #fff; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #232a38; border-radius: 8px; border: 2px solid var(--color-graphite); }
+  ::-webkit-scrollbar-thumb:hover { background: #2d3646; }
+
+  :focus-visible { outline: 2px solid var(--color-steel); outline-offset: 2px; border-radius: 4px; }
+}
+
+/* Components -------------------------------------------------------------- */
+@layer components {
+  /* A steel panel: lit from above (top edge lighter), faint top sheen. */
+  .panel {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 38%),
+      var(--color-panel);
+    border: 1px solid var(--color-line);
+    border-top-color: var(--color-edge);
+    border-radius: 14px;
+  }
+
+  /* Mono eyebrow / section label — the instrumentation voice. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-steel);
+  }
+
+  /* Numerals never reflow as they tick. */
+  .tnum { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    font-family: var(--font-mono); font-weight: 600; font-size: 0.8125rem;
+    letter-spacing: 0.04em; padding: 0.625rem 1.1rem; border-radius: 10px;
+    border: 1px solid transparent; cursor: pointer; transition: all 0.18s var(--ease-out);
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--color-ink); color: var(--color-graphite); }
+  .btn-primary:hover { background: #fff; transform: translateY(-1px); }
+  .btn-ghost { background: transparent; border-color: var(--color-line); color: var(--color-ink); }
+  .btn-ghost:hover { border-color: var(--color-steel); background: rgba(154, 166, 184, 0.06); }
+  /* The one red CTA — only the human-in-the-loop co-sign earns it. */
+  .btn-enforce { background: var(--color-red); color: #fff; }
+  .btn-enforce:hover { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+  /* Pills / chips */
+  .pill {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-family: var(--font-mono); font-size: 0.65rem; font-weight: 600;
+    letter-spacing: 0.04em; padding: 0.15rem 0.55rem; border-radius: 999px;
+    border: 1px solid var(--color-line);
+  }
+  .pill-ok   { color: var(--color-green);   border-color: rgba(41, 194, 117, 0.4);  background: rgba(41, 194, 117, 0.1); }
+  .pill-bad  { color: var(--color-redtext); border-color: rgba(229, 51, 42, 0.5);   background: rgba(229, 51, 42, 0.14); }
+  .pill-warn { color: var(--color-amber);   border-color: rgba(241, 196, 15, 0.4);  background: rgba(241, 196, 15, 0.1); }
+}
+
+/* Motion (every animation is gated on prefers-reduced-motion) ------------- */
+@keyframes cl-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes cl-pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(241, 196, 15, 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(241, 196, 15, 0); }
+}
+@keyframes cl-pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 51, 42, 0.45); }
+  50%      { box-shadow: 0 0 0 7px rgba(229, 51, 42, 0); }
+}
+@keyframes cl-spin { to { transform: rotate(360deg); } }
+@keyframes cl-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes cl-sheen { 0% { background-position: -150% 0; } 100% { background-position: 250% 0; } }
+
+@layer utilities {
+  .anim-breathe   { animation: cl-breathe 2.4s ease-in-out infinite; }
+  .anim-pulse-ring{ animation: cl-pulse-ring 2.2s ease-in-out infinite; }
+  .anim-pulse-red { animation: cl-pulse-red 1.8s ease-in-out infinite; }
+  .anim-spin      { animation: cl-spin 0.8s linear infinite; }
+  .anim-rise      { animation: cl-rise 0.45s var(--ease-out) both; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .anim-breathe, .anim-pulse-ring, .anim-pulse-red, .anim-spin, .anim-rise,
+    .anim-sheen::after { animation: none !important; }
+    /* also neutralise hover transitions/transforms (btn lift, color/shadow fades) */
+    *, *::before, *::after { transition-duration: 0.01ms !important; }
+    .btn:hover { transform: none !important; }
+  }
+}

@@ -7,27 +7,31 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "test:ci": "ng test --watch=false --browsers=ChromeHeadlessCI"
+    "test:ci": "ng test --watch=false --browsers=ChromeHeadlessCI",
+    "favicons": "node tools/gen-favicons.mjs"
   },
   "private": true,
   "dependencies": {
-    "@angular/animations": "^20.3.24",
-    "@angular/common": "^20.3.24",
-    "@angular/compiler": "^20.3.24",
-    "@angular/core": "^20.3.24",
-    "@angular/forms": "^20.3.24",
-    "@angular/platform-browser": "^20.3.24",
-    "@angular/platform-browser-dynamic": "^20.3.24",
-    "@angular/router": "^20.3.24",
+    "@angular/animations": "^20.3.25",
+    "@angular/common": "^20.3.25",
+    "@angular/compiler": "^20.3.25",
+    "@angular/core": "^20.3.25",
+    "@angular/forms": "^20.3.25",
+    "@angular/platform-browser": "^20.3.25",
+    "@angular/platform-browser-dynamic": "^20.3.25",
+    "@angular/router": "^20.3.25",
     "@microsoft/signalr": "^10.0.0",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.15.1"
   },
   "devDependencies": {
-    "@angular-devkit/build-angular": "^20.3.27",
-    "@angular/cli": "^20.3.27",
-    "@angular/compiler-cli": "^20.3.24",
+    "@angular-devkit/build-angular": "^20.3.28",
+    "@angular/cli": "^20.3.28",
+    "@angular/compiler-cli": "^20.3.25",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@tailwindcss/postcss": "^4.3.1",
     "@types/jasmine": "~5.1.0",
     "jasmine-core": "~5.1.0",
     "karma": "~6.4.0",
@@ -35,6 +39,12 @@
     "karma-coverage": "~2.2.0",
     "karma-jasmine": "~5.1.0",
     "karma-jasmine-html-reporter": "~2.1.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^4.3.1",
     "typescript": "~5.8.3"
+  },
+  "optionalDependencies": {
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.35.1"
   }
 }
