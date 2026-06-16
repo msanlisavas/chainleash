@@ -145,6 +145,8 @@ Runs on Linux, macOS, and Windows — the agent, contracts, dashboard, and `dock
 
 The agent's audit feed is **persisted** across restarts, and secrets are mounted read-only — never baked into an image. (Local dev without Docker: run `backend/ChainLeash.SignalProvider`, then `backend/ChainLeash.Agent` with `dotnet run`; the agent serves the dashboard from `wwwroot`.) Full details — including the faucet/gas budget — are in the [RUNBOOK](RUNBOOK.md).
 
+**Putting it online for others to watch?** See [Go live (public deploy)](RUNBOOK.md#go-live-public-deploy) — host the agent container behind HTTPS, switch three prod settings, and you're up. It's read-only for visitors by design; only the owner can co-sign or halt.
+
 ## Architecture
 
 - **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash — delegate / undelegate / redelegate under a per-action cap, validator allowlist, per-validator cap, action cooldown, owner kill-switch, propose→approve material co-sign, a posted CSPR bond with on-chain violation log, and owner-only withdraw.

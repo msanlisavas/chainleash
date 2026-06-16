@@ -134,6 +134,54 @@ The leash state (cap, bond, per-validator cap, balances, paused, violations) is 
 config; run several (or several configs) to manage many vaults. `scripts/onboard.ps1`
 writes a fresh config per vault.
 
+## Go live (public deploy)
+
+To put your instance on the internet for others to watch, you host the **agent
+container** — it serves the dashboard, the API and the SignalR feed *and* runs the agent
+worker, so this is a long-lived process, not static hosting. Any always-on host with
+Docker works: a small VPS (`docker compose up -d`), or a container platform (Fly.io,
+Render, Railway, Azure Container Apps).
+
+**1. Three prod config changes** (the local-dev defaults are wrong for prod):
+
+| Setting | Dev | Prod | Why |
+|---|---|---|---|
+| `Agent:MaxTicks` | `2` (in `appsettings.local.json`) | `0` | non-zero stops the host after N ticks; `0` = run forever |
+| `Casper:CsprCloudAccessKey` | shared public key | **your own** (`console.cspr.cloud`) | the public key is daily-rate-limited → the dashboard goes "chain read stale" under traffic |
+| `Dashboard:CsprClickAppId` | `csprclick-template` | **your own** (`console.cspr.click`) | reliable, branded wallet co-sign |
+
+**2. Expose it + TLS.** Set `BIND_ADDR=0.0.0.0` in `.env`, then put the agent behind
+**HTTPS** — wallet extensions / CSPR.click only sign in a secure context, and you want TLS
+for a public site. Simplest is Caddy (auto-HTTPS) or a Cloudflare Tunnel:
+
+```caddy
+chainleash.example.com {
+    reverse_proxy 127.0.0.1:5179   # the agent serves the dashboard + API + SignalR
+}
+```
+
+The dashboard is served **same-origin** as the API, so there's no CORS to configure. The
+CSP already allows `cdn.cspr.click`, `wss:` and `https:`.
+
+**3. Bring it up.**
+
+```bash
+cp .env.example .env     # set CSPR_CLOUD_KEY (+ VAULT_PKG / OWNER_PUBKEY for your vault)
+docker compose up -d --build
+curl -s localhost:5179/health   # 200 = chain reachable; reports agentGasCspr + lowGas
+```
+
+**Public exposure is already safe** — per-IP rate limits (api 60/min, cosign 10/min),
+secrets mounted read-only (never baked), non-root containers + healthchecks +
+`restart: unless-stopped`, and `/confirm` is single-use and on-chain-verified. A visitor
+can only **read**; they can't co-sign (not the owner) or move funds (the leash). The one
+ongoing task is **agent gas**: `/health` flags `lowGas`; top up from the
+[faucet](https://testnet.cspr.live/tools/faucet) when it dips.
+
+> Read-only by design: the public watches a real, bonded agent operate under the leash and
+> can verify every action on the explorer. The owner controls (co-sign, kill-switch) are
+> gated to the owner's wallet — demo those yourself by connecting your owner key.
+
 ## 4. Reproduce the demo beats
 
 - **Autonomous delegate** — with idle treasury and a compliant validator, the agent
