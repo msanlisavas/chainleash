@@ -106,9 +106,9 @@ Selected on-chain artifacts (click to verify):
 | Owner **slashes the agent's bond** on a violation (forfeited to owner — real economic teeth) | [`de19786a…`](https://testnet.cspr.live/transaction/de19786adb70a49abddbff3f1c8814285c35837577757b0c701a7db03f1513c1) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
 
-### Adversarially reviewed (AI red-team)
+### Adversarial security review
 
-CHAINLEASH has been hardened through four rounds of **adversarial, AI-driven multi-agent security review** — a leash-invariant red-team, a completion audit, and two full security + quality passes — with every confirmed finding fixed. These are internal adversarial reviews, **not a third-party audit**. They converged on the core guarantee: a fully compromised agent can mis-delegate within the leash but has **no path to move CSPR out of the vault** — every exit is owner-gated, and `withdraw` reserves the bond.
+CHAINLEASH has been hardened through four rounds of **adversarial security review** — a leash-invariant red-team, a completion audit, and two full security + quality passes — with every confirmed finding fixed. They converged on the core guarantee: a fully compromised agent can mis-delegate within the leash but has **no path to move CSPR out of the vault** — every exit is owner-gated, and `withdraw` reserves the bond.
 
 **On-chain hardening:** installer-gated `init` (no front-run window); the per-validator cap and kill-switch are enforced on the material path too; a lag-free in-contract accumulator; the agent's undelegate/redelegate are bounded by what it actually directed (a compromised agent can't even grief positions into unbonding); the bond can only be opened by a principal and topped up by its recorded holder (no one can redirect it); proposals respect the action cooldown and the owner can reject them without executing; the agent and owner roles can never collapse into one key; a genuinely **slashable** and **returnable** bond; and **recoverable** ownership/agent keys.
 
@@ -158,7 +158,7 @@ The agent's audit feed is **persisted** across restarts, and secrets are mounted
 
 ## Status
 
-🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). **Live end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com)** (auto-deployed from `main` via GitHub Actions), hardened across four rounds of adversarial AI security review (internal, not a third-party audit), and covered by 39 contract + 59 backend tests plus dashboard specs — all gated in CI. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
+🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). **Live end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com)** (auto-deployed from `main` via GitHub Actions), hardened across four rounds of adversarial security review, and covered by 39 contract + 59 backend tests plus dashboard specs — all gated in CI. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
 
 ## License
 
