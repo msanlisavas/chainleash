@@ -154,14 +154,13 @@ export class AppComponent implements OnInit, OnDestroy {
     return !!k && !!o && k.toLowerCase() === o.toLowerCase();
   }
 
-  /** Wrong account connected — sign out and reopen sign-in so the owner can pick the
-   *  right account (Casper Wallet shows its account list in the CSPR.click modal). */
+  /** Wrong account connected — open CSPR.click's account picker so the owner can select
+   *  the right account (signIn only shows the provider picker, not an account list). */
   async switchAccount(): Promise<void> {
     this.coSignError.set(null);
     this.walletConnecting.set(true);
     try {
-      await this.wallet.disconnect();
-      await this.wallet.connect();
+      await this.wallet.switchAccount();
     } catch (e: any) {
       this.coSignError.set(e?.message ?? 'could not switch account');
     } finally {

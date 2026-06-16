@@ -99,6 +99,22 @@ export class WalletService {
   }
 
   /**
+   * Switch the connected account. Casper Wallet only shares its ACTIVE account, so a
+   * plain signIn() (provider picker) can't change it — CSPR.click's `switchAccount()`
+   * opens the account picker instead. Falls back to sign-out + sign-in on older SDKs.
+   */
+  async switchAccount(): Promise<string | null> {
+    if (this.status() !== 'ready') return this.activeKey();
+    if (typeof this.sdk?.switchAccount === 'function') {
+      try { await this.sdk.switchAccount(); } catch { /* user cancelled the picker */ }
+      this.refreshActiveKey(); // the switched_account event also updates this
+      return this.activeKey();
+    }
+    await this.disconnect();
+    return this.connect();
+  }
+
+  /**
    * Sign + send a prepared, unsigned TransactionV1 JSON via the active wallet.
    * `transactionJson` is the server's {"transaction":{"Version1":{…}}} (already the shape
    * CSPR.click `send()` expects). Returns the on-chain tx hash for server-side confirm.
@@ -147,6 +163,8 @@ export class WalletService {
   private wireEvents(): void {
     this.sdk.on?.('csprclick:signed_in', (evt: any) => this.activeKey.set(evt?.account?.public_key ?? null));
     this.sdk.on?.('csprclick:switched_account', (evt: any) => this.activeKey.set(evt?.account?.public_key ?? null));
+    // fired when the user switches the active account inside the wallet extension itself
+    this.sdk.on?.('csprclick:unsolicited_account_change', () => this.refreshActiveKey());
     this.sdk.on?.('csprclick:signed_out', () => this.activeKey.set(null));
     this.sdk.on?.('csprclick:disconnected', () => this.activeKey.set(null));
   }

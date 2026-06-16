@@ -55,7 +55,9 @@ app.Use(async (ctx, next) =>
     h["Referrer-Policy"] = "strict-origin-when-cross-origin";
     h["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()";
     h["Content-Security-Policy"] =
-        "default-src 'self'; script-src 'self' https://cdn.cspr.click; " +
+        // cloudflareinsights = Cloudflare Web Analytics beacon (injected at the edge); its
+        // POST is already covered by connect-src https:.
+        "default-src 'self'; script-src 'self' https://cdn.cspr.click https://static.cloudflareinsights.com; " +
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " + // CSPR.click's wallet UI pulls Google Fonts
         "img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; " +
         "connect-src 'self' ws: wss: https:; " +
