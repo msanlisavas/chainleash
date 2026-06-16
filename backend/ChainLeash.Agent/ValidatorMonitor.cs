@@ -1,25 +1,38 @@
-using System.Text.Json;
+using CSPR.Cloud.Net.Clients;
+using CSPR.Cloud.Net.Objects.Config;
+using CSPR.Cloud.Net.Objects.Validator;
+using CSPR.Cloud.Net.Parameters.Filtering.Validator;
+using CSPR.Cloud.Net.Parameters.Wrapper.Validator;
 
 namespace ChainLeash.Agent;
 
-/// The agent's PERCEPTION layer: pulls live validator metrics (commission, active
-/// status, stake) from CSPR.cloud and scores the allowlisted set against the
-/// published delegation policy (max commission, must-be-active). This is real,
-/// free, on-chain-sourced data — Casper's actual staking primitive, not a mock.
+/// The agent's PERCEPTION layer: pulls live metrics (commission, active status, stake) for
+/// ONLY the allowlisted validators in a SINGLE filtered CSPR.cloud request (CSPR.Cloud.Net
+/// SDK, public_key filter) and scores them against the published delegation policy.
 ///
-/// The policy is deterministic and transparent on purpose: institutions want the
-/// agent to EXECUTE a published rule auditably, not to exercise opaque discretion.
+/// The validator set changes per era (~2h on Casper 2.0), not per tick — so the result is
+/// cached for ~an era and refreshed lazily. This replaced a per-tick 10-page scan of the
+/// whole validator set; request volume is now ~1 call per cache window instead of ~11/tick.
+///
+/// The policy is deterministic and transparent on purpose: institutions want the agent to
+/// EXECUTE a published rule auditably, not to exercise opaque discretion.
 public sealed class ValidatorMonitor
 {
     private readonly IConfiguration _cfg;
-    private readonly HttpClient _http;
+    private readonly CasperCloudRestClient _client;
+    private readonly bool _mainnet;
+    private readonly TimeSpan _ttl;
+    private IReadOnlyList<Assessment>? _cache;
+    private DateTime _cacheAt;
 
     public ValidatorMonitor(IConfiguration cfg)
     {
         _cfg = cfg;
-        _http = new HttpClient { BaseAddress = new Uri(cfg["Casper:CsprCloudBaseUrl"]!.TrimEnd('/') + "/") };
-        var key = cfg["Casper:CsprCloudAccessKey"];
-        if (!string.IsNullOrWhiteSpace(key)) _http.DefaultRequestHeaders.Add("Authorization", key);
+        var key = cfg["Casper:CsprCloudAccessKey"] ?? "";
+        _client = new CasperCloudRestClient(new CasperCloudClientConfig(key));
+        _mainnet = string.Equals(cfg["Casper:ChainName"], "casper", StringComparison.OrdinalIgnoreCase);
+        // ~one era (validators don't change intra-era); refreshed lazily on the next Assess.
+        _ttl = TimeSpan.FromSeconds(cfg.GetValue("Agent:ValidatorCacheSeconds", 1800));
     }
 
     /// One validator scored against policy.
@@ -31,78 +44,60 @@ public sealed class ValidatorMonitor
 
     public int MaxCommissionPercent => _cfg.GetValue("Staking:MaxCommissionPercent", 6);
 
-    /// Fetch + score every allowlisted validator, best (lowest compliant fee) first.
+    /// Fetch + score every allowlisted validator (best — lowest compliant fee — first).
+    /// Served from cache within the TTL; on a transient CSPR.cloud failure the last-known
+    /// set is returned rather than forcing the agent to HOLD on stale-but-fine data.
     public async Task<IReadOnlyList<Assessment>> Assess(CancellationToken ct = default)
     {
-        var byKey = await FetchEraValidators(ct);
+        if (_cache is not null && DateTime.UtcNow - _cacheAt < _ttl) return _cache;
+
+        var allow = Allowlist;
+        if (allow.Length == 0) return Array.Empty<Assessment>();
         var max = MaxCommissionPercent;
+        var net = _mainnet ? _client.Mainnet : _client.Testnet;
+
+        Dictionary<string, ValidatorData> byKey;
+        try
+        {
+            var resp = await net.Validator.GetValidatorsAsync(new ValidatorsRequestParameters
+            {
+                PageSize = Math.Max(allow.Length, 10),
+                FilterParameters = new ValidatorsFilterParameters { PublicKeys = allow.ToList() },
+            });
+            byKey = (resp?.Data ?? new List<ValidatorData>())
+                .Where(v => !string.IsNullOrEmpty(v.PublicKey))
+                .GroupBy(v => v.PublicKey!.ToLowerInvariant())
+                .ToDictionary(g => g.Key, g => g.First());
+        }
+        catch when (_cache is not null)
+        {
+            return _cache; // transient upstream failure — keep serving the last-known set
+        }
 
         var list = new List<Assessment>();
-        foreach (var pk in Allowlist)
+        foreach (var pk in allow)
         {
-            if (!byKey.TryGetValue(pk.ToLowerInvariant(), out var m))
+            if (!byKey.TryGetValue(pk.ToLowerInvariant(), out var v))
             {
                 list.Add(new Assessment(pk, -1, false, 0, false, "not in current era set"));
                 continue;
             }
-            var compliant = StakingPolicy.IsCompliant(m.FeePercent, m.IsActive, max);
-            var note = StakingPolicy.ComplianceNote(m.FeePercent, m.IsActive, max);
-            list.Add(new Assessment(pk, m.FeePercent, m.IsActive, m.StakeCspr, compliant, note));
+            var fee = v.Fee.HasValue ? (int)Math.Round((double)v.Fee.Value) : int.MaxValue; // null fee → fails policy
+            var stake = decimal.TryParse(v.TotalStake, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var motes) ? motes / 1_000_000_000m : 0m;
+            var compliant = StakingPolicy.IsCompliant(fee, v.IsActive, max);
+            var note = StakingPolicy.ComplianceNote(fee, v.IsActive, max);
+            list.Add(new Assessment(pk, fee, v.IsActive, stake, compliant, note));
         }
 
-        // Best first: compliant before breaching, then lowest commission, then more stake (stability).
-        return list
+        // Best first: compliant before breaching, then lowest commission, then more stake.
+        var ordered = list
             .OrderByDescending(a => a.Compliant)
             .ThenBy(a => a.FeePercent < 0 ? int.MaxValue : a.FeePercent)
             .ThenByDescending(a => a.StakeCspr)
             .ToList();
-    }
-
-    private readonly record struct Metric(int FeePercent, bool IsActive, decimal StakeCspr);
-
-    private async Task<Dictionary<string, Metric>> FetchEraValidators(CancellationToken ct)
-    {
-        var era = await CurrentEra(ct);
-        var map = new Dictionary<string, Metric>(StringComparer.OrdinalIgnoreCase);
-        // Paginate: the era set can exceed one page, and a missed page would misclassify a
-        // healthy allowlisted validator as "not in current era set" — and actively exit it.
-        for (var page = 1; page <= 10; page++)
-        {
-            using var doc = await GetJson($"validators?era_id={era}&page={page}&page_size=100", ct);
-            foreach (var v in doc.RootElement.GetProperty("data").EnumerateArray())
-            {
-                var pk = v.GetProperty("public_key").GetString()!.ToLowerInvariant();
-                var fee = v.TryGetProperty("fee", out var f) && f.ValueKind == JsonValueKind.Number ? f.GetInt32() : 0;
-                var active = v.TryGetProperty("is_active", out var a) && a.ValueKind == JsonValueKind.True;
-                var stake = 0m;
-                if (v.TryGetProperty("total_stake", out var s) && s.ValueKind == JsonValueKind.String
-                    && decimal.TryParse(s.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var motes))
-                    stake = motes / 1_000_000_000m;
-                map[pk] = new Metric(fee, active, stake);
-            }
-            var pageCount = doc.RootElement.TryGetProperty("page_count", out var pc) && pc.ValueKind == JsonValueKind.Number
-                ? pc.GetInt32() : 1;
-            if (page >= pageCount) break;
-        }
-        return map;
-    }
-
-    private async Task<long> CurrentEra(CancellationToken ct)
-    {
-        using var doc = await GetJson("auction-metrics", ct);
-        return doc.RootElement.GetProperty("data").GetProperty("current_era_id").GetInt64();
-    }
-
-    /// CSPR.cloud REST fetch with the failure CLASS made readable: a 429/quota response
-    /// arrives as a non-JSON body, and "'d' is an invalid start of a value" in the audit
-    /// feed helps nobody — name the real condition instead.
-    private async Task<JsonDocument> GetJson(string path, CancellationToken ct)
-    {
-        using var resp = await _http.GetAsync(path, ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode)
-            throw new HttpRequestException($"CSPR.cloud {path}: HTTP {(int)resp.StatusCode} (rate limit / quota?)");
-        try { return JsonDocument.Parse(body); }
-        catch (JsonException) { throw new HttpRequestException($"CSPR.cloud {path}: non-JSON response (rate limit / quota?)"); }
+        _cache = ordered;
+        _cacheAt = DateTime.UtcNow;
+        return ordered;
     }
 }

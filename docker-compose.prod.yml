@@ -46,7 +46,8 @@ services:
       - Casper__AgentSecretKeyPath=/secrets/agent/secret_key.pem
       - Agent__DataPath=/data/feed.json
       - Agent__MaxTicks=0            # run forever (dev-only configs use a small N)
-      - Agent__TickSeconds=${TICK_SECONDS:-30}
+      - Agent__TickSeconds=${TICK_SECONDS:-600}            # validators change per ~2h era — poll sparingly
+      - Agent__ValidatorCacheSeconds=${VALIDATOR_CACHE_SECONDS:-1800}  # cache the allowlisted-validator read ~per era
       - Agent__LowGasWarnCspr=${LOW_GAS_WARN:-50}
       - Dashboard__CsprClickAppId=${CSPR_CLICK_APP_ID:-csprclick-template}
       - X402__SignalUrl=http://signal-provider:5080/rate
