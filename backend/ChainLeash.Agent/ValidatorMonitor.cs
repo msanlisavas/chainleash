@@ -59,10 +59,19 @@ public sealed class ValidatorMonitor
         Dictionary<string, ValidatorData> byKey;
         try
         {
+            // The CSPR.cloud validators endpoint requires an era_id — fetch the current era first
+            // (one extra REST call per cache window, on the healthy REST quota).
+            var metrics = await net.Auction.GetAuctionMetricsAsync();
+            var era = metrics?.Data?.CurrentEraId
+                ?? throw new InvalidOperationException("CSPR.cloud returned no current_era_id");
             var resp = await net.Validator.GetValidatorsAsync(new ValidatorsRequestParameters
             {
                 PageSize = Math.Max(allow.Length, 10),
-                FilterParameters = new ValidatorsFilterParameters { PublicKeys = allow.ToList() },
+                FilterParameters = new ValidatorsFilterParameters
+                {
+                    PublicKeys = allow.ToList(),
+                    EraId = era.ToString(),
+                },
             });
             byKey = (resp?.Data ?? new List<ValidatorData>())
                 .Where(v => !string.IsNullOrEmpty(v.PublicKey))
