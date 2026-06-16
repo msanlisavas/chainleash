@@ -111,6 +111,12 @@ Open <http://localhost:5179> — the dashboard streams every agent decision live
 the full leash state read from chain. For dashboard development you can instead `ng serve`
 (port 4200) — it talks to the agent on `:5179` via CORS.
 
+> ⚠️ **`ng serve` is the Angular dev server — LOCAL DEVELOPMENT ONLY.** Never run it on a
+> server, and never expose it to a network (don't pass `--host`/`--disable-host-check`). It
+> binds `localhost` by default (pinned in `angular.json`) — keep it that way. In production the
+> **agent** serves the prebuilt static bundle from `wwwroot`; nothing runs the dev server. See
+> "Go live" below.
+
 ### Config reference (`backend/ChainLeash.Agent/appsettings.local.json`, gitignored)
 
 The leash state (cap, bond, per-validator cap, balances, paused, violations) is read
@@ -141,6 +147,12 @@ container** — it serves the dashboard, the API and the SignalR feed *and* runs
 worker, so this is a long-lived process, not static hosting. Any always-on host with
 Docker works: a small VPS (`docker compose up -d`), or a container platform (Fly.io,
 Render, Railway, Azure Container Apps).
+
+> ⚠️ **Serve the built bundle, not the dev server.** "Going live" hosts the **agent**, which
+> serves the *prebuilt static* dashboard from `wwwroot`. Do **not** run `ng serve` (the Angular
+> dev server) on a server or point your reverse proxy at it — it's a local-dev tool, never a
+> production server, and exposing it has carried dev-server CVEs (path-traversal / source
+> disclosure). Every step below exposes the **agent** (port 5179), not the dev server.
 
 **1. Three prod config changes** (the local-dev defaults are wrong for prod):
 
