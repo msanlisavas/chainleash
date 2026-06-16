@@ -41,6 +41,10 @@ services:
     environment:
       - ASPNETCORE_URLS=http://+:5179
       - Casper__CsprCloudAccessKey=${CSPR_CLOUD_KEY}
+      # Node RPC (reads + tx submit) = the public Casper testnet node by default: it's quota-free,
+      # whereas CSPR.cloud's node RPC is daily-quota limited. The agent's low request volume makes the
+      # public node ample. REST (validator perception + x402) still uses the CSPR.cloud key above.
+      - Casper__NodeRpcUrl=${NODE_RPC_URL:-https://node.testnet.casper.network/rpc}
       - Casper__GovernedVaultPackageHash=${VAULT_PKG}
       - Casper__OwnerPublicKeyHex=${OWNER_PUBKEY}
       - Casper__AgentSecretKeyPath=/secrets/agent/secret_key.pem
