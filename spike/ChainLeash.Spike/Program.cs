@@ -542,7 +542,9 @@ async Task VaultState()
     async Task<JsonElement> Rpc(string method, object prms)
     {
         var body = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method, @params = prms });
-        var resp = await http.PostAsync(node, new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+        var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        content.Headers.ContentType!.CharSet = null; // node.testnet.casper.network rejects the "; charset=utf-8" param (400)
+        var resp = await http.PostAsync(node, content);
         var text = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode) // e.g. 429 returns a non-JSON body — don't choke on it
             throw new Exception($"RPC {method}: HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} — {text.Trim()}");

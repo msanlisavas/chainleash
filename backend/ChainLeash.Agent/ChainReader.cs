@@ -66,7 +66,9 @@ public sealed class ChainReader
     private async Task<JsonElement> Rpc(string method, object prms)
     {
         var body = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method, @params = prms });
-        using var resp = await _http.PostAsync(_node, new StringContent(body, Encoding.UTF8, "application/json"));
+        var content = new StringContent(body, Encoding.UTF8, "application/json");
+        content.Headers.ContentType!.CharSet = null; // node.testnet.casper.network rejects the "; charset=utf-8" param (400)
+        using var resp = await _http.PostAsync(_node, content);
         var text = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode) // CSPR.cloud 429s arrive as non-JSON error pages
             throw new ChainRpcException(method, $"HTTP {(int)resp.StatusCode}");
