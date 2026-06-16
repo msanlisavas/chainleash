@@ -7,8 +7,11 @@
 <p align="center"><em>The trust layer for autonomous money-moving agents on Casper — controlled autonomy the chain enforces, auditable per decision.</em></p>
 
 <p align="center">
+  <a href="https://chainleash.ekolsoft.com"><img src="https://img.shields.io/badge/live-chainleash.ekolsoft.com-29c275?style=flat-square" alt="Live demo" /></a>
   <a href="https://github.com/msanlisavas/chainleash/actions/workflows/ci.yml"><img src="https://github.com/msanlisavas/chainleash/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
 </p>
+
+<p align="center"><strong>Live on Casper 2.0 testnet → <a href="https://chainleash.ekolsoft.com">chainleash.ekolsoft.com</a></strong> — a real bonded agent rebalancing CSPR under the leash, streamed live.</p>
 
 **CHAINLEASH is the bonded, chain-enforced leash for autonomous money-moving agents on Casper** — an agent that can rebalance, but cannot steal.
 
@@ -21,7 +24,7 @@ slashable bond  ·  human co-sign on material moves  ·  one-call kill-switch
 
 <p align="center">
   <img src="assets/dashboard.png" alt="CHAINLEASH live dashboard" width="820" />
-  <br/><em>The live dashboard — every agent decision streamed on-chain, with the leash enforced by the Casper contract.</em>
+  <br/><em>The live dashboard at <a href="https://chainleash.ekolsoft.com">chainleash.ekolsoft.com</a> — the leash shown as a live ARMED / AWAITING / HALTED instrument, with every agent decision streamed on-chain.</em>
 </p>
 
 ## The leash: enforced by the chain, not the server
@@ -151,11 +154,11 @@ The agent's audit feed is **persisted** across restarts, and secrets are mounted
 
 - **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash — delegate / undelegate / redelegate under a per-action cap, validator allowlist, per-validator cap, action cooldown, owner kill-switch, propose→approve material co-sign, a posted CSPR bond with on-chain violation log, and owner-only withdraw.
 - **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain client (`CasperVault`), and the x402 pay-to-think buyer + provider.
-- **Frontend** (`frontend/`) — Angular dashboard: the **full leash state read live from chain** (per-action cap, free/total balance, slashable bond, per-validator cap, violations, and a prominent kill-switch banner when the owner pauses the agent), a live audit feed, the validator-policy view with per-validator committed stake, x402 spend, and the human co-sign action. It re-syncs the snapshot on reconnect and surfaces a clear banner if the agent API is unreachable. The owner **co-signs in their own wallet** via CSPR.click: the agent builds the *unsigned* `approve_material` transaction, the owner signs it in Casper Wallet in-browser, and the agent confirms the result on-chain — **the server holds only the owner's public key, never the secret**. (A server-key co-sign path exists for local dev but is **off by default**.)
+- **Frontend** (`frontend/`) — Angular 20 + Tailwind dashboard, designed as an **institutional control console** (graphite/steel palette with red reserved for enforcement, self-hosted IBM Plex). One scrolling page: a hero "leash instrument" that reflects live **ARMED / AWAITING CO-SIGN / HALTED** state, a how-it-works + guarantee explainer, a "Run your own" self-host section, and the live console — the **full leash state read live from chain** (per-action cap, free/total balance, slashable bond, per-validator cap, violations, and a prominent kill-switch banner when the owner pauses the agent), a live audit feed, the validator-policy view with per-validator committed stake, x402 spend, and the human co-sign action. It re-syncs the snapshot on reconnect and surfaces a clear banner if the agent API is unreachable. The owner **co-signs in their own wallet** via CSPR.click: the agent builds the *unsigned* `approve_material` transaction, the owner signs it in Casper Wallet in-browser, and the agent confirms the result on-chain — **the server holds only the owner's public key, never the secret**. (A server-key co-sign path exists for local dev but is **off by default**.)
 
 ## Status
 
-🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). Live end-to-end on Casper 2.0 testnet, independently security-reviewed four times, and covered by 39 contract + 59 backend tests plus dashboard specs — all gated in CI. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
+🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). **Live end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com)** (auto-deployed from `main` via GitHub Actions), independently security-reviewed four times, and covered by 39 contract + 59 backend tests plus dashboard specs — all gated in CI. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
 
 ## License
 
