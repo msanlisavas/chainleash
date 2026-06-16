@@ -41,7 +41,7 @@ try
         case "account-hash": AccountHashes(); break;
         case "vault-tighten": await VaultTighten(); break;
         case "vault-deploy": await VaultDeploy(); break;
-        case "vault-upgrade": await VaultDeploy(upgrade: true); break;
+        case "vault-upgrade": await VaultDeploy(upgrade: true, pkgHashHex: args.Length > 1 ? args[1] : null); break;
         case "vault-find": await VaultFind(); break;
         case "vault-init": await VaultInit(); break;
         case "vault-set-validator": await VaultSetValidator(); break;
@@ -400,7 +400,7 @@ async Task VaultFind()
 
 // Install the Odra GovernedVault wasm via a TransactionV1 session (the proven pipeline).
 // Replicates Odra's installer args: odra_cfg_* + the init constructor args.
-async Task VaultDeploy(bool upgrade = false)
+async Task VaultDeploy(bool upgrade = false, string? pkgHashHex = null)
 {
     var cfg = Config();
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
@@ -419,6 +419,22 @@ async Task VaultDeploy(bool upgrade = false)
         new NamedArg("odra_cfg_is_upgradable", true),
         new NamedArg("odra_cfg_is_upgrade", upgrade),
     };
+    if (upgrade)
+    {
+        // Odra 2.7's upgrade_contract() reads these via RAW casper get_named_arg — the install path
+        // never touches them, so a fresh install omits them, but an upgrade reverts with
+        // ApiError::MissingArgument [2] without them. package_hash_to_upgrade is the existing
+        // package's 32-byte HashAddr; create_upgrade_group=false because the upgrade group already
+        // exists from the original Odra install (true is only for upgrading a non-Odra contract).
+        if (string.IsNullOrWhiteSpace(pkgHashHex))
+        {
+            Console.WriteLine("vault-upgrade needs the existing package hash: dotnet run -- vault-upgrade <hash-…>");
+            return;
+        }
+        var upgradeBytes = Convert.FromHexString(pkgHashHex.Replace("hash-", ""));
+        rargs.Add(new NamedArg("odra_cfg_package_hash_to_upgrade", CLValue.ByteArray(upgradeBytes)));
+        rargs.Add(new NamedArg("odra_cfg_create_upgrade_group", false));
+    }
 
     var tx = new Transaction.SessionBuilder()
         .From(agentKp.PublicKey)
