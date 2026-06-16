@@ -103,6 +103,92 @@
       </section>
 
       <aside class="flex flex-col gap-4">
+        @if (config()?.walletCoSignEnabled) {
+          <section class="panel p-5">
+            <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
+              Owner controls
+              <small class="text-mute font-normal text-meta">direct, signed in your own wallet</small>
+            </h3>
+
+            <!-- Shared wallet-connection bar: owner status / connect / switch account. -->
+            <div class="flex items-center gap-2.5 flex-wrap mb-4 pb-3 border-b border-line text-mini">
+              @if (wallet.activeKey(); as wk) {
+                <span class="pill" [class]="walletIsOwner() ? 'pill-ok' : 'pill-warn'">
+                  {{ walletIsOwner() ? 'owner wallet connected' : 'wrong account' }}
+                </span>
+                <span class="font-mono text-steel">{{ short(wk) }}</span>
+                @if (!walletIsOwner()) {
+                  <button class="btn btn-ghost py-1 px-2.5 text-mini" (click)="switchAccount()" [disabled]="walletConnecting()">Switch account</button>
+                }
+              } @else if (walletConnecting()) {
+                <span class="text-mute">waiting for wallet sign-in…</span>
+                <button class="text-steel hover:text-ink underline py-1 px-1" (click)="cancelConnect()">cancel</button>
+              } @else if (wallet.status() === 'ready') {
+                <button class="btn btn-ghost py-1.5 px-3 text-mini" (click)="connectWallet()">Connect owner wallet</button>
+              } @else if (wallet.status() === 'unavailable') {
+                <span class="text-mute">wallet SDK didn’t load (offline or blocked)</span>
+                <button class="text-steel hover:text-ink underline py-1 px-1" (click)="retryWallet()">retry</button>
+              } @else {
+                <span class="text-mute">loading wallet…</span>
+              }
+              <span class="text-mute font-mono ml-auto cursor-help" [title]="config()?.ownerPublicKey ?? ''">owner {{ short(config()?.ownerPublicKey ?? '') }}</span>
+            </div>
+
+            @if (walletIsOwner()) {
+              <div class="flex flex-col gap-4">
+                <!-- Kill-switch -->
+                <div>
+                  <p class="text-mute text-meta mb-1.5 uppercase tracking-wide">Kill-switch</p>
+                  @if (s?.paused) {
+                    <button class="btn btn-primary w-full" (click)="resumeAgent()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Resume agent'">
+                      @if (ownerBusy() === 'Resume agent') { <span class="spin anim-spin" aria-hidden="true"></span> resuming… } @else { Resume agent }
+                    </button>
+                  } @else {
+                    <button class="btn btn-enforce w-full" (click)="stopAgent()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Stop agent'">
+                      @if (ownerBusy() === 'Stop agent') { <span class="spin anim-spin" aria-hidden="true"></span> stopping… } @else { Stop agent — freeze every move }
+                    </button>
+                  }
+                </div>
+
+                <!-- Recall staked CSPR -->
+                <div>
+                  <p class="text-mute text-meta mb-1.5 uppercase tracking-wide">Recall staked CSPR → vault <span class="normal-case text-mute/70">(unbonds ~7 eras)</span></p>
+                  @for (v of committedValidators(); track v.publicKey) {
+                    <button class="btn btn-ghost w-full mb-2 last:mb-0 flex items-center justify-between gap-2"
+                            (click)="recall(v)" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === recallLabel(v)">
+                      @if (ownerBusy() === recallLabel(v)) { <span class="spin anim-spin" aria-hidden="true"></span> <span>recalling…</span> }
+                      @else {
+                        <span>Recall <b class="font-mono">{{ fmt(v.delegatedCspr) }}</b> CSPR</span>
+                        <span class="font-mono text-mute text-mini">{{ short(v.publicKey) }}</span>
+                      }
+                    </button>
+                  } @empty {
+                    <p class="text-mute text-meta">No stake currently directed — nothing to recall.</p>
+                  }
+                </div>
+
+                <!-- Withdraw free balance -->
+                <div>
+                  <p class="text-mute text-meta mb-1.5 uppercase tracking-wide">Withdraw free balance → your wallet</p>
+                  @if ((s?.freeBalanceCspr ?? 0) > 0) {
+                    <button class="btn btn-ghost w-full" (click)="withdrawFree()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Withdraw to wallet'">
+                      @if (ownerBusy() === 'Withdraw to wallet') { <span class="spin anim-spin" aria-hidden="true"></span> withdrawing… }
+                      @else { Withdraw {{ fmt(s?.freeBalanceCspr) }} CSPR to wallet }
+                    </button>
+                  } @else {
+                    <p class="text-mute text-meta">No free balance to withdraw — recall staked CSPR first, then withdraw once it unbonds.</p>
+                  }
+                </div>
+              </div>
+            } @else {
+              <p class="text-mute text-note">Connect the <b class="text-ink">owner account</b> to stop the agent, recall staked CSPR, or withdraw to your wallet.</p>
+            }
+
+            @if (ownerOk()) { <p class="text-green text-mini mt-3 font-semibold" role="status">✓ {{ ownerOk() }}</p> }
+            @if (ownerError()) { <p class="text-amber text-mini mt-3" role="alert">{{ ownerError() }}</p> }
+          </section>
+        }
+
         <section class="panel p-5">
           <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
             Allowlisted validators
@@ -135,31 +221,6 @@
             <small class="text-mute font-normal text-meta">co-signed in the owner's own wallet</small>
           </h3>
 
-          @if (config()?.walletCoSignEnabled) {
-            <div class="flex items-center gap-2.5 flex-wrap mb-3 pb-3 border-b border-line text-mini">
-              @if (wallet.activeKey(); as wk) {
-                <span class="pill" [class]="walletIsOwner() ? 'pill-ok' : 'pill-warn'">
-                  {{ walletIsOwner() ? 'owner wallet connected' : 'wrong account' }}
-                </span>
-                <span class="font-mono text-steel">{{ short(wk) }}</span>
-                @if (!walletIsOwner()) {
-                  <button class="btn btn-ghost py-1 px-2.5 text-mini" (click)="switchAccount()" [disabled]="walletConnecting()">Switch account</button>
-                }
-              } @else if (walletConnecting()) {
-                <span class="text-mute">waiting for wallet sign-in…</span>
-                <button class="text-steel hover:text-ink underline py-1 px-1" (click)="cancelConnect()">cancel</button>
-              } @else if (wallet.status() === 'ready') {
-                <button class="btn btn-ghost py-1.5 px-3 text-mini" (click)="connectWallet()">Connect owner wallet</button>
-              } @else if (wallet.status() === 'unavailable') {
-                <span class="text-mute">wallet SDK didn’t load (offline or blocked)</span>
-                <button class="text-steel hover:text-ink underline py-1 px-1" (click)="retryWallet()">retry</button>
-              } @else {
-                <span class="text-mute">loading wallet…</span>
-              }
-              <span class="text-mute font-mono ml-auto cursor-help" [title]="config()?.ownerPublicKey ?? ''">owner {{ short(config()?.ownerPublicKey ?? '') }}</span>
-            </div>
-          }
-
           @for (p of pending; track p.id) {
             <div class="border border-line rounded-xl px-3 py-3 mb-2.5 last:mb-0">
               <div class="flex items-center justify-between gap-2">
@@ -172,7 +233,7 @@
               @if (config()?.walletCoSignEnabled) {
                 <button class="btn btn-primary w-full mt-3"
                         (click)="coSignWallet(p)"
-                        [disabled]="coSigning() !== null || coSignBlocked() !== null"
+                        [disabled]="walletBusy() || coSignBlocked() !== null"
                         [attr.aria-busy]="coSigning() === p.id">
                   @if (coSigning() === p.id && coSignPhase() === 'wallet') { <span class="spin anim-spin" aria-hidden="true"></span> approve in your wallet… }
                   @else if (coSigning() === p.id && coSignPhase() === 'confirm') { <span class="spin anim-spin" aria-hidden="true"></span> confirming on-chain (≈1 min)… }
@@ -180,6 +241,13 @@
                 </button>
                 @if (coSigning() === p.id && coSignPhase() === 'wallet' && walletConnecting()) {
                   <button class="btn btn-ghost w-full mt-2" (click)="cancelConnect()">cancel sign-in</button>
+                }
+                @if (walletIsOwner()) {
+                  <button class="btn btn-ghost w-full mt-2 text-mini" (click)="rejectProposal(p)"
+                          [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === ('Reject #' + p.id)">
+                    @if (ownerBusy() === ('Reject #' + p.id)) { <span class="spin anim-spin" aria-hidden="true"></span> rejecting… }
+                    @else { Reject (resolve without executing) }
+                  </button>
                 }
                 @if (coSignBlocked(); as why) { <p class="text-mute text-meta mt-2">{{ why }}</p> }
               }

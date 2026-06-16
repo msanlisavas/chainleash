@@ -24,6 +24,7 @@
 .k-hold       { background: var(--color-raised);       color: var(--color-mute); }
 .k-online,
 .k-perceive   { background: rgba(154, 166, 184, 0.12); color: var(--color-steel); }
+.k-owner      { background: rgba(154, 166, 184, 0.22); color: var(--color-ink); } /* owner intervention — authoritative */
 
 /* A pending co-sign is the climax of the product — make its panel impossible to miss. */
 .attention {

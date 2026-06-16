@@ -142,33 +142,88 @@ public sealed class CasperVault
     /// `signTransactionV1` expect: {"transaction":{"Version1":{…}}}. The server constructs
     /// the tx but never signs it — the owner's key stays in the wallet. approve_material is
     /// owner-gated on-chain, so only the owner's signature can make it succeed.
-    public string BuildUnsignedApproveMaterialJson(uint id)
+    public string BuildUnsignedOwnerTxJson(string entryPoint, List<NamedArg> args, ulong paymentMotes)
     {
         if (_ownerKey is null) throw new InvalidOperationException("no owner public key configured (Casper:OwnerPublicKeyHex)");
 
         var tx = new Transaction.ContractCallBuilder()
             .ByPackageHash(_pkg, null, null)
-            .EntryPoint("approve_material")
-            .RuntimeArgs(new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) })
+            .EntryPoint(entryPoint)
+            .RuntimeArgs(args)
             .From(_ownerKey)
             .ChainName(_cfg["Casper:ChainName"]!)
-            .Payment(30_000_000_000UL, 1)
+            .Payment(paymentMotes, 1)
             .Build(); // NOT signed — the wallet adds the owner's signature
 
         // The C# SDK serializes a Transaction as {"Deploy":null,"Version1":{…}}. Lift the
         // Version1 node and wrap it the way the wallet SDKs consume it.
         var root = JsonNode.Parse(JsonSerializer.Serialize(tx))!.AsObject();
         var v1 = root["Version1"]!.DeepClone();
-        var wrapped = new JsonObject { ["transaction"] = new JsonObject { ["Version1"] = v1 } };
-        return wrapped.ToJsonString();
+        return new JsonObject { ["transaction"] = new JsonObject { ["Version1"] = v1 } }.ToJsonString();
     }
+
+    /// Owner co-sign of a material proposal (the unsigned tx the owner signs in-wallet).
+    public string BuildUnsignedApproveMaterialJson(uint id) =>
+        BuildUnsignedOwnerTxJson("approve_material",
+            new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) }, 30_000_000_000UL);
+
+    // --- Owner-direct controls: an unsigned-tx builder per owner-gated entry point. The native
+    // (un)delegate calls run an auction action, so they carry the same ~30 CSPR payment the
+    // agent's routine moves use; the pure-state owner calls (pause/withdraw/reject) are cheap. ---
+
+    /// Owner kill-switch: pause (freeze every agent move) or resume.
+    public string PrepareSetPaused(bool paused) =>
+        BuildUnsignedOwnerTxJson("set_paused",
+            new List<NamedArg> { new NamedArg("paused", CLValue.Bool(paused)) }, 5_000_000_000UL);
+
+    /// Owner withdraws FREE (liquid, non-bond) vault CSPR to their own account.
+    public string PrepareWithdraw(ulong amountMotes) =>
+        BuildUnsignedOwnerTxJson("withdraw",
+            new List<NamedArg> { new NamedArg("amount", CLValue.U512(amountMotes)) }, 5_000_000_000UL);
+
+    /// Owner emergency-undelegates staked CSPR back to the vault (unbonds over ~7 eras), then
+    /// `withdraw` moves it to the owner's wallet. Unbounded (unlike the agent's undelegate).
+    public string PrepareOwnerUndelegate(PublicKey validator, ulong amountMotes) =>
+        BuildUnsignedOwnerTxJson("owner_undelegate", new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("amount", CLValue.U512(amountMotes)),
+        }, 30_000_000_000UL);
+
+    /// Owner moves stake directly between validators (owner discretion, not allowlist-bound).
+    public string PrepareOwnerRedelegate(PublicKey from, PublicKey to, ulong amountMotes) =>
+        BuildUnsignedOwnerTxJson("owner_redelegate", new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(from)),
+            new NamedArg("new_validator", CLValue.PublicKey(to)),
+            new NamedArg("amount", CLValue.U512(amountMotes)),
+        }, 30_000_000_000UL);
+
+    /// Owner rejects a pending material proposal (resolve without executing).
+    public string PrepareRejectMaterial(uint id) =>
+        BuildUnsignedOwnerTxJson("reject_material",
+            new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) }, 5_000_000_000UL);
 
     /// Confirm a wallet-submitted co-sign: verify on-chain that the tx executed
     /// successfully AND that it genuinely called approve_material(id) on THIS vault — so a
     /// random successful tx hash can't forge a "co-signed" audit entry. Because
     /// approve_material is owner-gated in the contract, a SUCCESSFUL one proves the owner
     /// signed it; the server never needs to (and can't) hold the owner key.
-    public async Task<TxResult> ConfirmCoSign(uint id, string txHash, CancellationToken ct = default)
+    public Task<TxResult> ConfirmCoSign(uint id, string txHash, CancellationToken ct = default) =>
+        PollAndVerify(txHash, tx => VerifyApproveMaterial(tx, id), ct);
+
+    /// Confirm a wallet-submitted owner-direct action: poll until it executes, then verify it
+    /// really is `entryPoint` on THIS vault, owner-initiated. Every such entry point is
+    /// owner-gated on-chain, so a successful owner-initiated call IS the authorization.
+    public Task<TxResult> ConfirmOwnerTx(string entryPoint, string txHash, CancellationToken ct = default) =>
+        PollAndVerify(txHash, tx => VerifyOwnerTx(tx, entryPoint), ct);
+
+    /// Poll the chain for a submitted tx, then run `verify` once it has executed successfully.
+    /// A transient GetTransaction failure (node lag, a 429 on the shared CSPR.cloud key) must
+    /// NOT abandon a tx already on chain — the caller would wrongly retry and duplicate the
+    /// action — so in-loop errors are tolerated until the budget runs out. Honors cancellation
+    /// (browser closed) so we stop burning upstream RPCs on its behalf.
+    private async Task<TxResult> PollAndVerify(string txHash, Func<Transaction, string?> verify, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(txHash)) return new TxResult("", false, "missing txHash");
         var client = Rpc();
@@ -182,7 +237,7 @@ public sealed class CasperVault
                     var er = parsed.ExecutionInfo?.ExecutionResult;
                     if (er is null) { await Task.Delay(5000, ct); continue; }
                     if (!er.IsSuccess) return new TxResult(txHash, false, OdraErrors.Humanize(er.ErrorMessage));
-                    var why = VerifyApproveMaterial(parsed.Transaction, id);
+                    var why = verify(parsed.Transaction);
                     return why is null ? new TxResult(txHash, true, null) : new TxResult(txHash, false, why);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -190,19 +245,24 @@ public sealed class CasperVault
                 await Task.Delay(5000, ct);
             }
         }
-        // The caller went away (browser closed) — stop burning upstream RPCs on its behalf.
         catch (OperationCanceledException) { return new TxResult(txHash, false, "cancelled: client disconnected (timeout)"); }
         return new TxResult(txHash, false, "timeout waiting for on-chain confirmation");
     }
 
     /// Verify a fetched tx really is approve_material(id) on this package, owner-initiated.
     /// Delegates to the pure, unit-tested CoSignVerifier (fail-closed on every check).
-    private string? VerifyApproveMaterial(Transaction tx, uint id)
+    private string? VerifyApproveMaterial(Transaction tx, uint id) =>
+        CoSignVerifier.Verify(TxRoot(tx), _pkg, id, _ownerKey?.ToAccountHex(), _ownerKey?.GetAccountHash());
+
+    /// Verify a fetched tx really is the expected owner-gated entry point on this package,
+    /// owner-initiated. Same pure, fail-closed verifier path as the material co-sign.
+    private string? VerifyOwnerTx(Transaction tx, string entryPoint) =>
+        CoSignVerifier.VerifyEntryPoint(TxRoot(tx), _pkg, entryPoint, _ownerKey?.ToAccountHex(), _ownerKey?.GetAccountHash());
+
+    private static JsonObject? TxRoot(Transaction tx)
     {
-        JsonObject? root;
-        try { root = JsonNode.Parse(JsonSerializer.Serialize(tx))?.AsObject(); }
-        catch (Exception ex) { return $"could not parse tx: {ex.Message}"; }
-        return CoSignVerifier.Verify(root, _pkg, id, _ownerKey?.ToAccountHex(), _ownerKey?.GetAccountHash());
+        try { return JsonNode.Parse(JsonSerializer.Serialize(tx))?.AsObject(); }
+        catch { return null; } // unparseable → the verifier fails closed on a null root
     }
 
     private async Task<TxResult> Call(string entryPoint, List<NamedArg> args, ulong paymentMotes = 5_000_000_000UL, CancellationToken ct = default)

@@ -94,4 +94,53 @@ public class CoSignVerifierTests
     public void Non_numeric_id_fails_closed() =>
         Assert.NotNull(CoSignVerifier.Verify(
             Tx(argsOverride: "[[\"id\",{\"cl_type\":\"U32\",\"parsed\":\"zero\"}]]"), Pkg, 0, Owner, OwnerHash));
+
+    // --- VerifyEntryPoint: the owner-direct controls (pause/withdraw/owner_undelegate/…).
+    // Same fail-closed chain-of-custody as the material co-sign, minus the proposal-id check. ---
+
+    [Fact]
+    public void Owner_action_valid_passes() =>
+        Assert.Null(CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "set_paused"), Pkg, "set_paused", Owner, OwnerHash));
+
+    [Fact]
+    public void Owner_action_wrong_entry_point_rejected() =>
+        Assert.Contains("expected owner_undelegate",
+            CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "set_paused"), Pkg, "owner_undelegate", Owner, OwnerHash)!);
+
+    [Fact]
+    public void Owner_action_wrong_package_rejected() =>
+        Assert.Contains("different contract",
+            CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "withdraw", pkg: new string('0', 64)), Pkg, "withdraw", Owner, OwnerHash)!);
+
+    [Fact]
+    public void Owner_action_non_owner_initiator_rejected() =>
+        Assert.Contains("not initiated by the owner",
+            CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "withdraw", initiatorPk: "01" + new string('a', 64)), Pkg, "withdraw", Owner, OwnerHash)!);
+
+    [Fact]
+    public void Owner_action_accounthash_owner_passes() =>
+        Assert.Null(CoSignVerifier.VerifyEntryPoint(
+            Tx(entryPoint: "owner_undelegate", initiatorPk: null, initiatorAh: OwnerHash), Pkg, "owner_undelegate", Owner, OwnerHash));
+
+    [Fact]
+    public void Owner_action_no_owner_configured_skips_initiator() =>
+        Assert.Null(CoSignVerifier.VerifyEntryPoint(
+            Tx(entryPoint: "set_paused", initiatorPk: "01" + new string('a', 64)), Pkg, "set_paused", null, null));
+
+    [Fact]
+    public void Owner_action_native_target_rejected() =>
+        Assert.Contains("different contract",
+            CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "withdraw", pkg: null), Pkg, "withdraw", Owner, OwnerHash)!);
+
+    [Fact]
+    public void Owner_action_empty_expected_entry_point_fails_closed() =>
+        Assert.NotNull(CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "set_paused"), Pkg, "", Owner, OwnerHash));
+
+    [Fact]
+    public void Owner_action_malformed_tx_fails_closed() =>
+        Assert.NotNull(CoSignVerifier.VerifyEntryPoint(JsonNode.Parse("{\"nope\":1}")!.AsObject(), Pkg, "set_paused", Owner, OwnerHash));
+
+    [Fact]
+    public void Owner_action_hash_prefixed_addr_normalized() =>
+        Assert.Null(CoSignVerifier.VerifyEntryPoint(Tx(entryPoint: "withdraw", pkg: "hash-" + Pkg), Pkg, "withdraw", Owner, OwnerHash));
 }

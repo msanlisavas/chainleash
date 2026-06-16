@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
+using Casper.Network.SDK.Types;
 using ChainLeash.Agent;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -220,9 +221,165 @@ app.MapPost("/api/approve/{id:int}", async (int id, CasperVault vault, AuditFeed
     return Results.Json(new { r.Success, r.Hash, r.Error });
 }).RequireRateLimiting("cosign");
 
+// ───────────────────────── OWNER DIRECT CONTROLS ─────────────────────────
+// Stop the agent (kill-switch), recall staked CSPR to the vault, withdraw free balance to the
+// owner's wallet, redelegate, or reject a proposal — all in the owner's OWN wallet, same flow as
+// the material co-sign: server builds the UNSIGNED owner tx, the owner signs it in their wallet,
+// the server confirms on-chain. Every entry point is owner-gated in the contract, so a confirmed
+// success proves the owner signed; the server never holds the owner key.
+
+// Step 1 — build the unsigned owner-action tx for the wallet to sign.
+app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILoggerFactory lf) =>
+{
+    if (vault.OwnerKey is null) return Results.Json(new { error = "no owner public key configured" }, statusCode: 400);
+    var action = (body?.Action ?? "").Trim().ToLowerInvariant();
+    try
+    {
+        string json = action switch
+        {
+            "pause"      => vault.PrepareSetPaused(true),
+            "unpause"    => vault.PrepareSetPaused(false),
+            "withdraw"   => vault.PrepareWithdraw(OwnerActions.ToMotes(body!.AmountCspr)),
+            "undelegate" => vault.PrepareOwnerUndelegate(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), OwnerActions.ToMotes(body.AmountCspr)),
+            "redelegate" => vault.PrepareOwnerRedelegate(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), PublicKey.FromHexString(OwnerActions.RequireHex(body.NewValidator)), OwnerActions.ToMotes(body.AmountCspr)),
+            "reject"     => vault.PrepareRejectMaterial((uint)OwnerActions.RequireId(body!.Id)),
+            _            => throw new ArgumentException("unknown action"),
+        };
+        return Results.Content("{\"transactionJson\":" + json + ",\"ownerPublicKey\":\"" + vault.OwnerKey.ToAccountHex() + "\"}", "application/json");
+    }
+    catch (Exception ex) when (ex is ArgumentException or FormatException)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: 400); // bad amount / validator hex / id
+    }
+    catch (Exception ex)
+    {
+        lf.CreateLogger("Owner").LogWarning(ex, "owner prepare ({Action}) failed", action); // detail stays server-side
+        return Results.Json(new { error = "could not build the owner transaction" }, statusCode: 500);
+    }
+}).RequireRateLimiting("cosign");
+
+// Step 2 — the wallet submitted the signed owner tx; verify it on-chain, then reflect it.
+app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault, AuditFeed feed, ILoggerFactory lf, HttpContext http) =>
+{
+    var log = lf.CreateLogger("Owner");
+    var action = (body?.Action ?? "").Trim().ToLowerInvariant();
+    var entryPoint = OwnerActions.EntryPoint(action);
+    if (entryPoint is null) return Results.Json(new { Success = false, Error = "unknown action" }, statusCode: 400);
+    var hash = (body!.TxHash ?? "").Trim().ToLowerInvariant();
+    if (string.IsNullOrWhiteSpace(hash) || hash.Length is < 32 or > 80 || !hash.All(Uri.IsHexDigit))
+        return Results.Json(new { Success = false, Error = "invalid txHash" }, statusCode: 400);
+    if (!consumedCoSign.TryAdd(hash)) // single-use: an owner tx can't be replayed to re-forge an audit entry
+        return Results.Json(new { Success = false, Error = "action already processed" }, statusCode: 409);
+
+    // ConfirmOwnerTx verifies on-chain that this tx really is `entryPoint` on THIS vault,
+    // owner-initiated and successful — so success == a genuine owner action, not a forged hash.
+    var r = await vault.ConfirmOwnerTx(entryPoint, hash, http.RequestAborted);
+    if (!r.Success)
+    {
+        var err = r.Error ?? "";
+        if (err.Contains("timeout", StringComparison.OrdinalIgnoreCase) || err.Contains("cancelled", StringComparison.OrdinalIgnoreCase))
+            consumedCoSign.Remove(hash); // simply not visible yet — allow a retry
+        log.LogInformation("owner action {Action} not confirmed: {Err}", action, r.Error); // detail stays server-side
+        return Results.Json(new { Success = false, Error = "not confirmed on-chain" }, statusCode: 400);
+    }
+
+    // Optimistic, chain-truthful update so the dashboard reflects the action immediately — the
+    // worker's next tick rebuilds the whole state from chain regardless, but its cadence is now
+    // per-era, and a kill-switch must show as engaged at once. (The tx already executed on-chain.)
+    var msg = OwnerActions.ApplyEffect(feed.State, action, body);
+    await feed.Push(new AuditEvent(DateTime.UtcNow.ToString("HH:mm:ss"), 0, "OWNER", msg,
+        body.Validator, body.AmountCspr, r.Hash, true, DateTime.UtcNow.ToString("o")));
+    await feed.PushState();
+    return Results.Json(new { r.Success, r.Hash });
+}).RequireRateLimiting("cosign");
+
 app.MapHub<AuditHub>("/hub/audit");
 
 app.Run();
 
 // Body for POST /api/approve/{id}/confirm — the hash of the wallet-submitted co-sign tx.
 record ConfirmReq(string TxHash);
+
+// Bodies for the owner-direct controls. `Action` selects the owner-gated entry point; the rest
+// are the action's params (CSPR amount, validator(s), proposal id) — only those it needs are set.
+record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id);
+record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id);
+
+/// Server-side whitelist + effects for the owner-direct controls. Keeping the action→entry-point
+/// map here (not client-supplied) means /confirm always verifies the entry point the action
+/// claims, so a pause tx hash can't be confirmed as an undelegate.
+static class OwnerActions
+{
+    public static string? EntryPoint(string action) => action switch
+    {
+        "pause" or "unpause" => "set_paused",
+        "withdraw"           => "withdraw",
+        "undelegate"         => "owner_undelegate",
+        "redelegate"         => "owner_redelegate",
+        "reject"             => "reject_material",
+        _                    => null,
+    };
+
+    public static ulong ToMotes(decimal? cspr)
+    {
+        if (cspr is not { } v || v <= 0) throw new ArgumentException("amount must be positive");
+        var motes = decimal.Truncate(v * 1_000_000_000m);
+        if (motes > ulong.MaxValue) throw new ArgumentException("amount too large");
+        return (ulong)motes;
+    }
+
+    public static int RequireId(int? id) => id is { } v && v >= 0 ? v : throw new ArgumentException("missing or invalid id");
+
+    public static string RequireHex(string? hex) =>
+        !string.IsNullOrWhiteSpace(hex) && hex.All(Uri.IsHexDigit) ? hex : throw new ArgumentException("missing or invalid validator key");
+
+    /// Optimistically mirror an owner action that already executed on-chain into the live state,
+    /// and return the audit-feed message. Amounts/validators come from the request and drive only
+    /// the DISPLAY; the on-chain effect is whatever the owner signed, reconciled next tick.
+    public static string ApplyEffect(FeedState s, string action, OwnerConfirmReq body)
+    {
+        var amt = body.AmountCspr ?? 0m;
+        switch (action)
+        {
+            case "pause":
+                s.Paused = true;
+                return "Owner engaged the kill-switch — agent paused. Every agent move is rejected on-chain until resumed.";
+            case "unpause":
+                s.Paused = false;
+                return "Owner released the kill-switch — agent resumed.";
+            case "withdraw":
+                s.TotalBalanceCspr = Math.Max(0, s.TotalBalanceCspr - amt);
+                s.FreeBalanceCspr = Math.Max(0, s.FreeBalanceCspr - amt);
+                return $"Owner withdrew {amt:N0} CSPR of free balance to their wallet.";
+            case "undelegate":
+                ReduceCommitted(s, body.Validator, amt);
+                return $"Owner recalled {amt:N0} CSPR from {Short(body.Validator)} — unbonds to the vault over ~7 eras, then Withdraw moves it to your wallet.";
+            case "redelegate":
+                ReduceCommitted(s, body.Validator, amt);
+                AddCommitted(s, body.NewValidator, amt);
+                return $"Owner moved {amt:N0} CSPR from {Short(body.Validator)} → {Short(body.NewValidator)}.";
+            case "reject":
+                if (body.Id is { } id and >= 0)
+                    s.Proposals = s.Proposals.Select(p => p.Id == (uint)id ? p with { Resolved = true } : p).ToList();
+                return $"Owner rejected material proposal #{body.Id} — resolved without executing.";
+            default:
+                return "Owner action confirmed on-chain.";
+        }
+    }
+
+    static void ReduceCommitted(FeedState s, string? validatorHex, decimal amt)
+    {
+        if (string.IsNullOrEmpty(validatorHex)) return;
+        s.Validators = s.Validators.Select(v => string.Equals(v.PublicKey, validatorHex, StringComparison.OrdinalIgnoreCase)
+            ? v with { DelegatedCspr = Math.Max(0, v.DelegatedCspr - amt) } : v).ToList();
+    }
+
+    static void AddCommitted(FeedState s, string? validatorHex, decimal amt)
+    {
+        if (string.IsNullOrEmpty(validatorHex)) return;
+        s.Validators = s.Validators.Select(v => string.Equals(v.PublicKey, validatorHex, StringComparison.OrdinalIgnoreCase)
+            ? v with { DelegatedCspr = v.DelegatedCspr + amt } : v).ToList();
+    }
+
+    static string Short(string? s) => s is { Length: > 10 } ? s[..10] + "…" : (s ?? "");
+}

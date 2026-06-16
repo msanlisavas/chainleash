@@ -56,6 +56,11 @@ export class AppComponent implements OnInit, OnDestroy {
   coSignError = signal<string | null>(null);
   coSignOk = signal<string | null>(null);
 
+  // Owner-direct controls (kill-switch, recall staked, withdraw) — owner signs in their wallet.
+  ownerBusy = signal<string | null>(null);   // label of the in-flight owner action
+  ownerError = signal<string | null>(null);
+  ownerOk = signal<string | null>(null);
+
   private conn?: signalR.HubConnection;
   private destroyed = false;
   private retryTimer?: ReturnType<typeof setTimeout>;
@@ -227,6 +232,49 @@ export class AppComponent implements OnInit, OnDestroy {
   pendingProposals(): ProposalView[] {
     return (this.state()?.proposals ?? []).filter(p => !p.resolved);
   }
+
+  /** Validators with stake the owner could recall (committed > 0). */
+  committedValidators(): ValidatorView[] {
+    return (this.state()?.validators ?? []).filter(v => v.delegatedCspr > 0);
+  }
+
+  /** True while any owner action OR co-sign is mid-flight — serialize wallet use. */
+  walletBusy(): boolean { return this.ownerBusy() !== null || this.coSigning() !== null; }
+
+  /**
+   * Run an owner-direct action: server builds the UNSIGNED owner tx → owner signs it in their
+   * own wallet → server confirms it on-chain. Same non-custodial flow as the material co-sign;
+   * every entry point is owner-gated on-chain, so the server never holds the owner key.
+   */
+  async ownerAction(action: string, body: Record<string, unknown>, label: string): Promise<void> {
+    this.ownerError.set(null); this.ownerOk.set(null);
+    if (!this.walletIsOwner()) { this.ownerError.set('Connect the owner account first.'); return; }
+    this.ownerBusy.set(label);
+    try {
+      const prep = await firstValueFrom(this.http.post<{ transactionJson: unknown; ownerPublicKey: string }>(
+        `${this.api}/api/owner/prepare`, { action, ...body }));
+      const hash = await this.wallet.send(prep.transactionJson, prep.ownerPublicKey);
+      const res = await firstValueFrom(this.http.post<{ success: boolean; hash: string; error?: string }>(
+        `${this.api}/api/owner/confirm`, { action, txHash: hash, ...body }));
+      if (res.success) this.ownerOk.set(`${label} — confirmed on-chain.`);
+      else this.ownerError.set(res.error ?? 'On-chain confirmation failed.');
+    } catch (e: any) {
+      this.ownerError.set(e?.message ?? 'Action failed.');
+    } finally {
+      this.ownerBusy.set(null);
+    }
+  }
+
+  stopAgent(): void { this.ownerAction('pause', {}, 'Stop agent'); }
+  resumeAgent(): void { this.ownerAction('unpause', {}, 'Resume agent'); }
+  recallLabel(v: ValidatorView): string { return `Recall ${this.short(v.publicKey)}`; }
+  recall(v: ValidatorView): void {
+    this.ownerAction('undelegate', { validator: v.publicKey, amountCspr: v.delegatedCspr }, this.recallLabel(v));
+  }
+  withdrawFree(): void {
+    this.ownerAction('withdraw', { amountCspr: this.state()?.freeBalanceCspr ?? 0 }, 'Withdraw to wallet');
+  }
+  rejectProposal(p: ProposalView): void { this.ownerAction('reject', { id: p.id }, `Reject #${p.id}`); }
 
   /** Why the in-wallet co-sign button is unusable right now (null = usable). */
   coSignBlocked(): string | null {
