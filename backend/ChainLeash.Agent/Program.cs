@@ -81,7 +81,15 @@ if (app.Configuration.GetValue("Casper:AllowServerKeyCoSign", false)
 // replayed historical co-sign targets a proposal the chain already reports as resolved).
 var consumedCoSign = new BoundedSet(4096);
 
-// Liveness + chain reachability + gas monitoring (for uptime checks / ops dashboards).
+// Process-liveness probe for the CONTAINER healthcheck — ZERO chain reads, so a 30s Docker probe
+// can't hammer the node-RPC quota (the old healthcheck hit /health → 2 query_balance every 30s ≈
+// 5,760 node-RPC calls/day, the single biggest quota drain). A real chain outage is surfaced by the
+// agent tick (it HOLDs + flags Stale) and by /health below (the rich on-demand ops endpoint) — not
+// by restarting the container, which can't fix an upstream outage and would only crash-loop.
+app.MapGet("/healthz", () => Results.Text("ok"));
+
+// Rich chain reachability + gas monitoring for OPERATORS/uptime monitors (on-demand, not the 30s
+// container probe). Does a live chain read each call, so don't point a high-frequency probe at it.
 app.MapGet("/health", async (ChainReader chain, CasperVault vault, X402Client x402, AuditFeed feed, IConfiguration cfg, ILoggerFactory lf) =>
 {
     var warn = cfg.GetValue("Agent:LowGasWarnCspr", 50m);

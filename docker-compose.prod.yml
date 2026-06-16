@@ -48,6 +48,7 @@ services:
       - Agent__MaxTicks=0            # run forever (dev-only configs use a small N)
       - Agent__TickSeconds=${TICK_SECONDS:-600}            # validators change per ~2h era — poll sparingly
       - Agent__ValidatorCacheSeconds=${VALIDATOR_CACHE_SECONDS:-1800}  # cache the allowlisted-validator read ~per era
+      - Agent__ConfigCacheSeconds=${CONFIG_CACHE_SECONDS:-1800}        # cache rarely-changing on-chain config (cap/violations/interval)
       - Agent__LowGasWarnCspr=${LOW_GAS_WARN:-50}
       - Dashboard__CsprClickAppId=${CSPR_CLICK_APP_ID:-csprclick-template}
       - X402__SignalUrl=http://signal-provider:5080/rate
@@ -58,7 +59,9 @@ services:
       - ./secrets/agent:/secrets/agent:ro
       - chainleash-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5179/health | grep -qE \"200|503\""]
+      # process-liveness only — /healthz does ZERO chain reads (the old /health probe hit the chain
+      # twice every 30s ≈ 5,760 node-RPC calls/day). A chain outage surfaces via HOLD/Stale + /health.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5179/healthz >/dev/null"]
       interval: 30s
       start_period: 40s
     restart: unless-stopped

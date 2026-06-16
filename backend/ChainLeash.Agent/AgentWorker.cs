@@ -31,6 +31,7 @@ public sealed class AgentWorker : BackgroundService
     private int _failStreak;      // consecutive failed on-chain actions → exponential backoff
     private int _backoffUntilTick;
     private string? _lastTickError; // edge-trigger the tick-error HOLD so an outage doesn't flood the feed
+    private const int GasCheckEveryNTicks = 6; // agent gas changes only on spend → refresh ~hourly at 600s, not every tick
 
     public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators,
         ChainReader chain, IConfiguration cfg, IHostApplicationLifetime life, AuditFeed feed)
@@ -114,12 +115,16 @@ public sealed class AgentWorker : BackgroundService
         //    "kill-switch off" or "cap 0"; the loop's catch emits HOLD and flags Stale.
         var paused = await _chain.Paused();
         var cap = await _chain.ValueCapCspr();
-        var free = await _chain.FreeBalanceCspr();
+        // Read the vault purse balance + bond ONCE; free = total − bond. (RefreshState used to
+        // re-read both — two extra node-RPC calls per tick for values already in hand.)
+        var total = await _chain.TotalBalanceCspr();
+        var bond = await _chain.BondCspr();
+        var free = total - bond;
         var assessments = await _validators.Assess(ct);
         var committed = new Dictionary<string, decimal>();
         foreach (var a in assessments) committed[a.PublicKey] = await _chain.CommittedCspr(a.PublicKey);
 
-        await RefreshState(assessments, committed, cap, free, paused);
+        await RefreshState(assessments, committed, cap, total, bond, free, paused);
         await MaybeWarnLowGas();
 
         if (_vault.ReadOnly) return; // observer mode: perceive + stream live state, never act
@@ -135,20 +140,9 @@ public sealed class AgentWorker : BackgroundService
             _log.LogInformation("tick {T}: backing off after {N} failed action(s) until tick {U}", _tick, _failStreak, _backoffUntilTick);
             return; // backoff already announced via HOLD when it started
         }
-        // Respect the vault's on-chain cooldown: don't sign a move the contract will
-        // certainly revert with RateLimited — a revert still burns real gas every tick.
-        var intervalMs = await _chain.ActionIntervalMs();
-        if (intervalMs > 0)
-        {
-            var lastMs = await _chain.LastActionTimeMs();
-            var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (lastMs != 0 && nowMs < lastMs + intervalMs)
-            {
-                _log.LogInformation("tick {T}: vault cooldown active ({Left}s left) → holding", _tick, (lastMs + intervalMs - nowMs) / 1000);
-                return;
-            }
-        }
 
+        // Decide whether there's anything to do FIRST — at a per-era cadence most ticks are HOLDs,
+        // and a HOLD tick must not spend node-RPCs reading the on-chain cooldown it will never use.
         var breach = assessments.FirstOrDefault(a => !a.Compliant && committed.GetValueOrDefault(a.PublicKey) > 0);
         var best = assessments.FirstOrDefault(a => a.Compliant);
         var hasBreach = breach.PublicKey is not null && committed.GetValueOrDefault(breach.PublicKey) > 0;
@@ -161,6 +155,20 @@ public sealed class AgentWorker : BackgroundService
             return;
         }
         if (_actions >= maxActions) { await Emit("HOLD", $"On-chain action budget spent ({_actions}) → holding."); return; }
+
+        // There IS a move to make — now (and only now) read the vault's on-chain cooldown, so we
+        // don't sign a move the contract will revert with RateLimited (a revert still burns gas).
+        var intervalMs = await _chain.ActionIntervalMs();
+        if (intervalMs > 0)
+        {
+            var lastMs = await _chain.LastActionTimeMs();
+            var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (lastMs != 0 && nowMs < lastMs + intervalMs)
+            {
+                _log.LogInformation("tick {T}: vault cooldown active ({Left}s left) → holding", _tick, (lastMs + intervalMs - nowMs) / 1000);
+                return;
+            }
+        }
 
         // 2) Pay-to-think: an action is warranted, so buy the premium risk read.
         var escalate = false;
@@ -291,7 +299,7 @@ public sealed class AgentWorker : BackgroundService
     }
 
     private async Task RefreshState(IReadOnlyList<ValidatorMonitor.Assessment> assessments, Dictionary<string, decimal> committed,
-        decimal cap, decimal free, bool paused)
+        decimal cap, decimal total, decimal bond, decimal free, bool paused)
     {
         var s = _feed.State;
         s.Actions = _actions;
@@ -299,13 +307,17 @@ public sealed class AgentWorker : BackgroundService
         s.CapCspr = cap;
         s.Paused = paused;
         s.FreeBalanceCspr = free;
+        s.TotalBalanceCspr = total; // already read this tick — don't re-fetch
+        s.BondCspr = bond;          // already read this tick — don't re-fetch
         try
         {
-            s.BondCspr = await _chain.BondCspr();
-            s.TotalBalanceCspr = await _chain.TotalBalanceCspr();
-            s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr();
-            s.Violations = (int)await _chain.Violations();
-            s.AgentGasCspr = _vault.AgentKey is null ? 0 : await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
+            s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr(); // long-TTL cached in ChainReader
+            s.Violations = (int)await _chain.Violations();              // long-TTL cached in ChainReader
+            // Agent gas changes only when the agent spends — refresh ~hourly (every Nth tick), keeping
+            // the last value otherwise; the low-gas warning is edge-triggered so this is ample.
+            if (_vault.AgentKey is null) s.AgentGasCspr = 0;
+            else if (_tick % GasCheckEveryNTicks == 1 || s.AgentGasCspr == 0)
+                s.AgentGasCspr = await _chain.AccountBalanceCspr(_vault.AgentKey.ToAccountHex());
             // The co-sign queue is CHAIN truth — it survives restarts and can't be forged
             // by replaying old co-sign hashes. Known propose-tx hashes are kept for links.
             var known = s.Proposals.ToDictionary(p => p.Id, p => p.TxHash);

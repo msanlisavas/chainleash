@@ -54,8 +54,9 @@ services:
       # persist the audit feed across restarts
       - chainleash-data:/data
     healthcheck:
-      # 503 = chain unreachable but the process is fine — still alive
-      test: ["CMD-SHELL", "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5179/health | grep -qE \"200|503\""]
+      # process-liveness only — /healthz does ZERO chain reads, so the 30s probe can't drain the
+      # node-RPC quota. A chain outage surfaces via the agent's HOLD/Stale + /health, not a restart.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5179/healthz >/dev/null"]
       interval: 30s
       start_period: 20s
     restart: unless-stopped

@@ -29,6 +29,10 @@ public sealed class ChainReader
     private string? _mainPurse;
     private string? _srh;
     private DateTime _srhAt;
+    // Rarely-changing, on-chain-ENFORCED config fields get a long TTL so the per-tick loop doesn't
+    // re-read owner-set values that change only on (rare) owner action.
+    private readonly TimeSpan _configTtl;
+    private readonly Dictionary<string, (object Value, DateTime At)> _configCache = new();
 
     // GovernedVault field indices (declaration order, 1-based — Odra reserves index 0).
     private const byte IxValueCap = 3, IxBond = 4, IxViolations = 5, IxNextId = 6,
@@ -43,6 +47,20 @@ public sealed class ChainReader
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         var key = cfg["Casper:CsprCloudAccessKey"];
         if (!string.IsNullOrWhiteSpace(key)) _http.DefaultRequestHeaders.Add("Authorization", key);
+        _configTtl = TimeSpan.FromSeconds(cfg.GetValue("Agent:ConfigCacheSeconds", 1800));
+    }
+
+    /// Serve a rarely-changing config field from cache for _configTtl. Safe because these values are
+    /// either ENFORCED on-chain (cap/per-validator-cap/action-interval — a stale read just risks one
+    /// chain-reverted move at worst, never a custody break) or display-only (violations). The
+    /// kill-switch (Paused), balances, committed stake, and LastActionTime are NEVER cached here.
+    private async Task<T> CachedConfig<T>(string key, Func<Task<T>> read)
+    {
+        if (_configCache.TryGetValue(key, out var e) && DateTime.UtcNow - e.At < _configTtl)
+            return (T)e.Value;
+        var v = await read();
+        _configCache[key] = (v!, DateTime.UtcNow);
+        return v;
     }
 
     private async Task<JsonElement> Rpc(string method, object prms)
@@ -135,13 +153,15 @@ public sealed class ChainReader
 
     private static byte[] U32Le(uint v) => new[] { (byte)v, (byte)(v >> 8), (byte)(v >> 16), (byte)(v >> 24) };
 
-    public async Task<decimal> ValueCapCspr() => OdraBytes.U512Cspr(await ReadBytes(IxValueCap));
+    // Cached (long TTL): owner-set config that changes rarely + is chain-enforced or display-only.
+    public Task<decimal> ValueCapCspr() => CachedConfig("cap", async () => OdraBytes.U512Cspr(await ReadBytes(IxValueCap)));
+    public Task<decimal> MaxPerValidatorCspr() => CachedConfig("maxpv", async () => OdraBytes.U512Cspr(await ReadBytes(IxMaxPerValidator)));
+    public Task<uint> Violations() => CachedConfig("violations", async () => OdraBytes.U32(await ReadBytes(IxViolations)));
+    public Task<ulong> ActionIntervalMs() => CachedConfig("interval", async () => OdraBytes.U64(await ReadBytes(IxMinActionInterval)));
+    // Fresh every read: kill-switch + values that change on a normal action (no caching).
     public async Task<decimal> BondCspr() => OdraBytes.U512Cspr(await ReadBytes(IxBond));
-    public async Task<decimal> MaxPerValidatorCspr() => OdraBytes.U512Cspr(await ReadBytes(IxMaxPerValidator));
     public async Task<bool> Paused() => OdraBytes.Bool(await ReadBytes(IxPaused));
     public async Task<uint> NextProposalId() => OdraBytes.U32(await ReadBytes(IxNextId));
-    public async Task<uint> Violations() => OdraBytes.U32(await ReadBytes(IxViolations));
-    public async Task<ulong> ActionIntervalMs() => OdraBytes.U64(await ReadBytes(IxMinActionInterval));
     public async Task<ulong> LastActionTimeMs() => OdraBytes.U64(await ReadBytes(IxLastActionTime));
     public async Task<decimal> CommittedCspr(string validatorHex) => OdraBytes.U512Cspr(await ReadBytes(IxCommitted, Convert.FromHexString(validatorHex)));
 
