@@ -8,7 +8,10 @@
 # to it; the signal provider stays internal to the compose network.
 services:
   signal-provider:
-    image: msanlisavas/chainleash-signal-provider:latest
+    # deploy-server.sh sets IMAGE_TAG=<commit sha> so a redeploy runs the EXACT reviewed
+    # build, not a mutable :latest a registry-compromise could swap. Falls back to latest
+    # for the first local `up --build` bootstrap.
+    image: msanlisavas/chainleash-signal-provider:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: backend/ChainLeash.SignalProvider/Dockerfile
@@ -25,7 +28,7 @@ services:
     restart: unless-stopped
 
   agent:
-    image: msanlisavas/chainleash-agent:latest
+    image: msanlisavas/chainleash-agent:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: backend/ChainLeash.Agent/Dockerfile

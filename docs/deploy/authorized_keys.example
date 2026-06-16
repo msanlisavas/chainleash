@@ -1,0 +1,21 @@
+# CHAINLEASH CI deploy key — server lockdown (reviewable record of what's on the box)
+#
+# The GitHub Actions deploy job authenticates with the DEPLOY_SSH_KEY secret. On the
+# server, that key's public half is pinned in ~murat/.ssh/authorized_keys to a SINGLE
+# forced command with `restrict`, so a leaked key can ONLY trigger a redeploy — it can't
+# open a shell, allocate a PTY, or forward ports/agent into the private compose network.
+#
+# `restrict` (OpenSSH 7.2+) enables every no-* restriction by default and stays safe as
+# OpenSSH adds new options — strictly better than enumerating no-pty,no-port-forwarding,…
+#
+# Install (one line, exact form on the server):
+#
+#   restrict,command="bash /home/murat/chainleash/scripts/deploy-server.sh" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIRkR84EM2XT1rom2fv/emKGLaqNBc6Jw56/mIoZlU8u chainleash-ci-deploy
+#
+# Verify the lockdown (must NOT run the injected command — only the deploy script):
+#
+#   ssh -i <deploy_key> murat@<host> 'id; cat /etc/passwd'
+#   # → prints the deploy script's output (git pull / compose), never id/passwd.
+#
+# The public host key the runner pins (DEPLOY_KNOWN_HOSTS secret) comes from:
+#   ssh-keyscan -t ed25519 <host>     # verify out-of-band before trusting

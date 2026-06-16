@@ -1,0 +1,71 @@
+name: deploy
+
+# Publishes CHAINLEASH to the production server (chainleash.ekolsoft.com).
+#
+# Secret safety: this job runs ONLY on push to main (and manual dispatch) — forked PRs
+# never run it and never receive secrets (GitHub's own rule). All secrets live in the
+# `production` Environment, which is locked to the main branch, so no other branch or
+# fork can reach them. We never use pull_request_target and never a self-hosted runner.
+# Third-party surface is minimal: only actions/checkout (SHA-pinned); Docker Hub login,
+# image build/push, and the deploy are raw docker/ssh so no marketplace action ever
+# handles the secrets. The deploy SSH key is additionally pinned on the server to a
+# single forced command (scripts/deploy-server.sh) — it cannot open a shell.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build, push images, deploy
+    runs-on: ubuntu-latest
+    # Belt-and-suspenders with the production Environment's main-only branch policy:
+    # even a workflow_dispatch from another branch won't deploy.
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build + push images
+        run: |
+          set -euo pipefail
+          AGENT=msanlisavas/chainleash-agent
+          SIG=msanlisavas/chainleash-signal-provider
+          SHA="${{ github.sha }}"
+          docker build -f backend/ChainLeash.Agent/Dockerfile          -t "$AGENT:latest" -t "$AGENT:$SHA" .
+          docker build -f backend/ChainLeash.SignalProvider/Dockerfile -t "$SIG:latest"   -t "$SIG:$SHA"   .
+          docker push "$AGENT:latest"; docker push "$AGENT:$SHA"
+          docker push "$SIG:latest";   docker push "$SIG:$SHA"
+
+      - name: Deploy over SSH (server runs the pinned forced command)
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the origin's host key (no TOFU) so a network/DNS attacker can't MITM the
+          # deploy connection — this also protects the secret origin IP.
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o ConnectTimeout=25 \
+              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+
+      - name: Docker logout
+        if: always()
+        run: docker logout || true

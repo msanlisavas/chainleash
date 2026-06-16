@@ -37,7 +37,11 @@ Thumbs.db
 *.private.key
 spike/**/Config/*.local.json
 **/appsettings.local.json
+# all real env files (.env, .env.prod, .env.local, …) — never the templates
 .env
+.env.*
+!.env.example
+!.env.prod.example
 
 # Claude Code / AI planning artifacts — keep LOCAL, never publish
 docs/superpowers/
