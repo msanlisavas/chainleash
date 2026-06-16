@@ -488,6 +488,28 @@ impl GovernedVault {
         self.env().emit_event(Withdrawn { to: owner, amount });
     }
 
+    /// Owner EMERGENCY undelegate — pull staked CSPR back to the vault regardless of what
+    /// the agent directed (UNBOUNDED, unlike the agent's `undelegate`, so the owner can
+    /// unwind principal + compounded rewards). Allowed WHILE PAUSED so the owner can wind a
+    /// position down mid-incident without the agent's cooperation. Funds return to the VAULT
+    /// purse after Casper's ~7-era unbonding; `withdraw` then moves them to the owner's wallet.
+    pub fn owner_undelegate(&mut self, validator: PublicKey, amount: U512) {
+        self.assert_owner();
+        self.env().undelegate(validator.clone(), amount);
+        self.sub_committed(&validator, amount); // saturates at 0
+        self.env().emit_event(Undelegated { validator, amount });
+    }
+
+    /// Owner moves stake between validators directly (owner discretion — not allowlist- or
+    /// cap-bound, and allowed while paused), e.g. to consolidate before an exit.
+    pub fn owner_redelegate(&mut self, validator: PublicKey, new_validator: PublicKey, amount: U512) {
+        self.assert_owner();
+        self.do_redelegate(validator.clone(), new_validator.clone(), amount);
+        self.sub_committed(&validator, amount);
+        self.add_committed(&new_validator, amount);
+        self.env().emit_event(Redelegated { from: validator, to: new_validator, amount });
+    }
+
     // ---- views ----
     pub fn get_agent(&self) -> Address {
         self.agent.get().unwrap_or_revert_with(self, Error::NotInitialized)
@@ -751,6 +773,33 @@ mod tests {
         let (env, mut vault, _a, owner, v1, v2) = setup();
         env.set_caller(owner);
         assert_eq!(vault.try_redelegate(v1, v2, u(500)), Err(Error::NotAgent.into()));
+    }
+
+    #[test]
+    fn owner_undelegate_works_while_paused_and_clears_committed() {
+        // Owner can pull a position back even while the kill-switch is engaged, without
+        // the agent proposing — the direct emergency-exit lever.
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500
+        env.set_caller(owner);
+        vault.set_paused(true);
+        vault.owner_undelegate(v1.clone(), u(500));
+        assert_eq!(vault.committed_to(v1), u(0));
+    }
+
+    #[test]
+    fn owner_undelegate_by_non_owner_reverts() {
+        let (env, mut vault, agent, _o, v1, _v2) = setup();
+        env.set_caller(agent);
+        assert_eq!(vault.try_owner_undelegate(v1, u(100)), Err(Error::NotOwner.into()));
+    }
+
+    #[test]
+    fn owner_redelegate_by_non_owner_reverts() {
+        let (env, mut vault, agent, _o, v1, v2) = setup();
+        env.set_caller(agent);
+        assert_eq!(vault.try_owner_redelegate(v1, v2, u(100)), Err(Error::NotOwner.into()));
     }
 
     #[test]
