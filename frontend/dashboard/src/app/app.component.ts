@@ -147,6 +147,28 @@ export class AppComponent implements OnInit, OnDestroy {
 
   retryWallet(): void { this.wallet.retry(); }
 
+  /** True only when the connected wallet IS the vault owner (case-insensitive). */
+  walletIsOwner(): boolean {
+    const k = this.wallet.activeKey();
+    const o = this.config()?.ownerPublicKey;
+    return !!k && !!o && k.toLowerCase() === o.toLowerCase();
+  }
+
+  /** Wrong account connected — sign out and reopen sign-in so the owner can pick the
+   *  right account (Casper Wallet shows its account list in the CSPR.click modal). */
+  async switchAccount(): Promise<void> {
+    this.coSignError.set(null);
+    this.walletConnecting.set(true);
+    try {
+      await this.wallet.disconnect();
+      await this.wallet.connect();
+    } catch (e: any) {
+      this.coSignError.set(e?.message ?? 'could not switch account');
+    } finally {
+      this.walletConnecting.set(false);
+    }
+  }
+
   /**
    * Owner co-signs a material proposal IN THEIR OWN WALLET:
    * server builds the unsigned approve_material tx → wallet signs + sends → server

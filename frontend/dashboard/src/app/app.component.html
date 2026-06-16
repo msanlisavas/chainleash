@@ -138,10 +138,13 @@
           @if (config()?.walletCoSignEnabled) {
             <div class="flex items-center gap-2.5 flex-wrap mb-3 pb-3 border-b border-line text-mini">
               @if (wallet.activeKey(); as wk) {
-                <span class="pill" [class]="wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase() ? 'pill-ok' : 'pill-warn'">
-                  {{ wk.toLowerCase() === config()?.ownerPublicKey?.toLowerCase() ? 'owner wallet connected' : 'wrong account' }}
+                <span class="pill" [class]="walletIsOwner() ? 'pill-ok' : 'pill-warn'">
+                  {{ walletIsOwner() ? 'owner wallet connected' : 'wrong account' }}
                 </span>
                 <span class="font-mono text-steel">{{ short(wk) }}</span>
+                @if (!walletIsOwner()) {
+                  <button class="btn btn-ghost py-1 px-2.5 text-mini" (click)="switchAccount()" [disabled]="walletConnecting()">Switch account</button>
+                }
               } @else if (walletConnecting()) {
                 <span class="text-mute">waiting for wallet sign-in…</span>
                 <button class="text-steel hover:text-ink underline py-1 px-1" (click)="cancelConnect()">cancel</button>

@@ -14,6 +14,12 @@ name: deploy
 on:
   push:
     branches: [main]
+    # Docs/assets never change the runtime image — don't rebuild/redeploy for them.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'assets/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 concurrency:

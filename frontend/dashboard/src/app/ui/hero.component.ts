@@ -50,10 +50,20 @@ import { Component, computed, input } from '@angular/core';
         </p>
 
         <ul class="grid grid-cols-2 gap-2 text-meta">
-          @for (c of constraints; track c) {
+          @for (c of constraints; track c.key) {
             <li class="flex items-center gap-2 font-mono text-steel
                        border border-line rounded-lg px-2.5 py-2 bg-graphite/40">
-              <span class="text-mute" aria-hidden="true">{{ c.g }}</span>{{ c.t }}
+              <svg class="w-4 h-4 shrink-0 text-steel" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                @switch (c.key) {
+                  @case ('cap')       { <path d="M3.34 19a10 10 0 1 1 17.32 0" /><path d="m12 14 4-4" /> }
+                  @case ('allowlist') { <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="m9 12 2 2 4-4" /> }
+                  @case ('bond')      { <circle cx="8" cy="8" r="6" /><path d="M18.09 10.37A6 6 0 1 1 10.34 18" /><path d="M7 6h1v4" /><path d="m16.71 13.88.7.71-2.82 2.82" /> }
+                  @case ('kill')      { <path d="M12 2v10" /><path d="M18.36 6.64a9 9 0 1 1-12.73 0" /> }
+                  @case ('cosign')    { <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /> }
+                }
+              </svg>
+              {{ c.t }}
             </li>
           }
         </ul>
@@ -92,11 +102,11 @@ export class HeroComponent {
   live = input<boolean>(false);
 
   readonly constraints = [
-    { g: '◷', t: 'per-action cap' },
-    { g: '☑', t: 'validator allowlist' },
-    { g: '◆', t: 'slashable bond' },
-    { g: '⏻', t: 'kill-switch' },
-    { g: '✍', t: 'human co-sign' },
+    { key: 'cap', t: 'per-action cap' },
+    { key: 'allowlist', t: 'validator allowlist' },
+    { key: 'bond', t: 'slashable bond' },
+    { key: 'kill', t: 'kill-switch' },
+    { key: 'cosign', t: 'human co-sign' },
   ];
 
   private status = computed<'halted' | 'awaiting' | 'armed' | 'idle'>(() => {
