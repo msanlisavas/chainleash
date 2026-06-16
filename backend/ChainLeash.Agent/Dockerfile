@@ -34,7 +34,9 @@ COPY --from=dashboard /src/backend/ChainLeash.Agent/wwwroot ./wwwroot
 ENV ASPNETCORE_URLS=http://+:5179
 EXPOSE 5179
 USER app
-# 503 = chain unreachable but the process is alive — don't flap the container on RPC hiccups
+# Process-liveness only — /healthz does ZERO chain reads, so the 30s probe can't drain the
+# node-RPC quota. (compose overrides this with the same /healthz probe; this covers a bare
+# `docker run`.) A chain outage surfaces via the agent's HOLD/Stale + /health, not a restart.
 HEALTHCHECK --interval=30s --start-period=20s \
-  CMD curl -s -o /dev/null -w "%{http_code}" http://localhost:5179/health | grep -qE "200|503"
+  CMD curl -fsS http://localhost:5179/healthz >/dev/null
 ENTRYPOINT ["dotnet", "ChainLeash.Agent.dll"]
