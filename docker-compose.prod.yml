@@ -1,0 +1,63 @@
+# CHAINLEASH — production stack (behind nginx + Cloudflare).
+#
+# Images are built + pushed to Docker Hub by CI (.github/workflows/deploy.yml) and
+# PULLED here. `build:` is kept too, so the very first bring-up can build on the
+# server with `docker compose -f docker-compose.prod.yml up -d --build` (no registry
+# needed). All app secrets live on the SERVER (./.env + ./secrets), never in the image
+# or in git. The agent is published to LOOPBACK ONLY — nginx terminates TLS and proxies
+# to it; the signal provider stays internal to the compose network.
+services:
+  signal-provider:
+    image: msanlisavas/chainleash-signal-provider:latest
+    build:
+      context: .
+      dockerfile: backend/ChainLeash.SignalProvider/Dockerfile
+    environment:
+      - ASPNETCORE_URLS=http://+:5080
+      - X402__CsprCloudAccessKey=${CSPR_CLOUD_KEY}
+      - X402__PayToAccountHash=${X402_PAY_TO}
+      - X402__ExpectedPayerAccountHash=${X402_EXPECTED_PAYER}
+      - X402__PriceMotes=${X402_PRICE_MOTES:-2500000000}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5080/ >/dev/null"]
+      interval: 30s
+      start_period: 20s
+    restart: unless-stopped
+
+  agent:
+    image: msanlisavas/chainleash-agent:latest
+    build:
+      context: .
+      dockerfile: backend/ChainLeash.Agent/Dockerfile
+    depends_on:
+      signal-provider:
+        condition: service_healthy
+    # LOOPBACK ONLY — never 0.0.0.0. nginx (host) proxies https://chainleash.ekolsoft.com here.
+    ports:
+      - "127.0.0.1:${AGENT_PORT:-8120}:5179"
+    environment:
+      - ASPNETCORE_URLS=http://+:5179
+      - Casper__CsprCloudAccessKey=${CSPR_CLOUD_KEY}
+      - Casper__GovernedVaultPackageHash=${VAULT_PKG}
+      - Casper__OwnerPublicKeyHex=${OWNER_PUBKEY}
+      - Casper__AgentSecretKeyPath=/secrets/agent/secret_key.pem
+      - Agent__DataPath=/data/feed.json
+      - Agent__MaxTicks=0            # run forever (dev-only configs use a small N)
+      - Agent__TickSeconds=${TICK_SECONDS:-30}
+      - Agent__LowGasWarnCspr=${LOW_GAS_WARN:-50}
+      - Dashboard__CsprClickAppId=${CSPR_CLICK_APP_ID:-csprclick-template}
+      - X402__SignalUrl=http://signal-provider:5080/rate
+      - X402__ProviderPubKeyHex=${X402_PROVIDER_PUBKEY}
+      - X402__ExpectedPayerAccountHash=${X402_EXPECTED_PAYER}
+    volumes:
+      # the agent signs with its OWN bounded key only; mounted read-only, never baked in
+      - ./secrets/agent:/secrets/agent:ro
+      - chainleash-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5179/health | grep -qE \"200|503\""]
+      interval: 30s
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  chainleash-data:
