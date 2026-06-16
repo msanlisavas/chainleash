@@ -41,6 +41,7 @@ try
         case "account-hash": AccountHashes(); break;
         case "vault-tighten": await VaultTighten(); break;
         case "vault-deploy": await VaultDeploy(); break;
+        case "vault-upgrade": await VaultDeploy(upgrade: true); break;
         case "vault-find": await VaultFind(); break;
         case "vault-init": await VaultInit(); break;
         case "vault-set-validator": await VaultSetValidator(); break;
@@ -399,7 +400,7 @@ async Task VaultFind()
 
 // Install the Odra GovernedVault wasm via a TransactionV1 session (the proven pipeline).
 // Replicates Odra's installer args: odra_cfg_* + the init constructor args.
-async Task VaultDeploy()
+async Task VaultDeploy(bool upgrade = false)
 {
     var cfg = Config();
     var agentKp = KeyPair.FromPem(cfg["AgentSecretKeyPath"]!);
@@ -407,13 +408,16 @@ async Task VaultDeploy()
     if (!File.Exists(wasmPath)) { Console.WriteLine($"wasm not found: {wasmPath} — build it first."); return; }
     var wasm = File.ReadAllBytes(wasmPath);
 
-    // No constructor -> install needs only the Odra cfg args; we initialize() separately.
+    // upgrade=true adds a NEW contract version to the EXISTING package (same
+    // package_hash_key_name) so state (committed, delegations, bond, owner) is preserved;
+    // upgrade=false is a fresh install. A failed upgrade is non-destructive — the current
+    // version keeps serving.
     var rargs = new List<NamedArg>
     {
         new NamedArg("odra_cfg_package_hash_key_name", "governed_vault_package_hash"),
         new NamedArg("odra_cfg_allow_key_override", true),
         new NamedArg("odra_cfg_is_upgradable", true),
-        new NamedArg("odra_cfg_is_upgrade", false),
+        new NamedArg("odra_cfg_is_upgrade", upgrade),
     };
 
     var tx = new Transaction.SessionBuilder()
@@ -427,7 +431,7 @@ async Task VaultDeploy()
     tx.Sign(agentKp);
 
     var client = Rpc(cfg);
-    Console.WriteLine($"Installing GovernedVault ({wasm.Length} bytes)...");
+    Console.WriteLine($"{(upgrade ? "Upgrading" : "Installing")} GovernedVault ({wasm.Length} bytes)...");
     try
     {
         await client.PutTransaction(tx);
@@ -1116,6 +1120,7 @@ void Help()
     Console.WriteLine();
     Console.WriteLine("agent vault ops (signed by the agent key):");
     Line("vault-deploy", "Install the GovernedVault wasm (TransactionV1 session, ~500 CSPR gas)");
+    Line("vault-upgrade", "Upgrade the GovernedVault in place — same package, preserves state (~500 CSPR gas)");
     Line("vault-init <package-hash> [capMotes]", "Initialize the deployed vault (agent/owner/value_cap)");
     Line("vault-deposit <package-hash> <motes>", "Fund the vault's purse via the payable proxy");
     Line("vault-bond <package-hash> <motes>", "Post the agent's slashable bond into the vault");
