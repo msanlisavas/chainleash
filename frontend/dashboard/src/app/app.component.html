@@ -168,7 +168,7 @@
                             (click)="recall(v)" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === recallLabel(v)">
                       @if (ownerBusy() === recallLabel(v)) { <span class="spin anim-spin" aria-hidden="true"></span> <span>recalling…</span> }
                       @else {
-                        <span>Recall <b class="font-mono">{{ fmt(v.delegatedCspr) }}</b> CSPR</span>
+                        <span>Recall <b class="font-mono">{{ fmt(recallableCspr(v)) }}</b> CSPR</span>
                         <span class="font-mono text-mute text-mini">{{ short(v.publicKey) }}</span>
                       }
                     </button>

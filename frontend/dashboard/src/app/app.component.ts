@@ -249,9 +249,17 @@ export class AppComponent implements OnInit, OnDestroy {
     return (this.state()?.proposals ?? []).filter(p => !p.resolved);
   }
 
-  /** Validators with stake the owner could recall (committed > 0). */
+  /** Stake actually delegated on-chain for a validator right now (from the staking view), not just
+   *  what the agent DIRECTED. These diverge while a redelegation is settling (~7 eras): committed
+   *  shows the move, but there's no undelegatable delegation yet — recalling it reverts on-chain. */
+  recallableCspr(v: ValidatorView): number {
+    const pos = (this.staking()?.positions ?? []).find(p => p.publicKey.toLowerCase() === v.publicKey.toLowerCase());
+    return pos ? pos.currentStakeCspr : v.delegatedCspr; // fall back to committed until the staking view loads
+  }
+
+  /** Validators the owner can actually recall NOW (a real on-chain delegation exists). */
   committedValidators(): ValidatorView[] {
-    return (this.state()?.validators ?? []).filter(v => v.delegatedCspr > 0);
+    return (this.state()?.validators ?? []).filter(v => this.recallableCspr(v) > 0);
   }
 
   /** True while any owner action OR co-sign is mid-flight — serialize wallet use. */
@@ -285,7 +293,7 @@ export class AppComponent implements OnInit, OnDestroy {
   resumeAgent(): void { this.ownerAction('unpause', {}, 'Resume agent'); }
   recallLabel(v: ValidatorView): string { return `Recall ${this.short(v.publicKey)}`; }
   recall(v: ValidatorView): void {
-    this.ownerAction('undelegate', { validator: v.publicKey, amountCspr: v.delegatedCspr }, this.recallLabel(v));
+    this.ownerAction('undelegate', { validator: v.publicKey, amountCspr: this.recallableCspr(v) }, this.recallLabel(v));
   }
   withdrawFree(): void {
     this.ownerAction('withdraw', { amountCspr: this.state()?.freeBalanceCspr ?? 0 }, 'Withdraw to wallet');
