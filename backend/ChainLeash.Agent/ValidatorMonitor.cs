@@ -95,9 +95,10 @@ public sealed class ValidatorMonitor
     /// returns the last-known set rather than forcing the agent to HOLD on stale-but-fine data.
     private async Task<IReadOnlyList<Assessment>> Metrics(CancellationToken ct)
     {
-        if (_cache is not null && DateTime.UtcNow - _cacheAt < _ttl) return _cache;
-
         var allow = Allowlist;
+        // Cache is valid only if it still covers the CURRENT watch-list — so an owner add/remove of
+        // a validator forces a fresh fetch on the next tick instead of waiting out the per-era cache.
+        if (_cache is not null && DateTime.UtcNow - _cacheAt < _ttl && CacheCovers(allow)) return _cache;
         if (allow.Length == 0) return Array.Empty<Assessment>();
         var max = MaxCommissionPercent;
         var net = _mainnet ? _client.Mainnet : _client.Testnet;
@@ -157,6 +158,15 @@ public sealed class ValidatorMonitor
         _cache = ordered;
         _cacheAt = DateTime.UtcNow;
         return ordered;
+    }
+
+    /// True when the cached metric set exactly matches the current watch-list — so an owner
+    /// add/remove of a validator invalidates the cache instead of serving a stale set for an era.
+    private bool CacheCovers(string[] allow)
+    {
+        if (_cache is null) return false;
+        var cached = new HashSet<string>(_cache.Select(a => a.PublicKey.ToLowerInvariant()));
+        return allow.Length == cached.Count && allow.All(a => cached.Contains(a.ToLowerInvariant()));
     }
 
     /// Refresh the validator-name map (account-info branding) for the current era, cached for the
