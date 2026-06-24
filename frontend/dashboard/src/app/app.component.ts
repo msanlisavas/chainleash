@@ -18,7 +18,7 @@ interface AuditEvent {
   iso?: string; // full ISO-8601 UTC timestamp (older persisted events may lack it)
 }
 interface ValidatorView {
-  publicKey: string; feePercent: number; active: boolean; compliant: boolean; delegatedCspr: number; note: string; name?: string;
+  publicKey: string; feePercent: number; active: boolean; compliant: boolean; delegatedCspr: number; note: string; name?: string; allowed?: boolean;
 }
 interface ProposalView {
   id: number; validator: string; amountCspr: number; undelegate: boolean; txHash: string; resolved: boolean;
@@ -336,6 +336,14 @@ export class AppComponent implements OnInit, OnDestroy {
   }
   /** Current on-chain cooldown in seconds (for the policy panel's placeholder/label). */
   cooldownSeconds(): number { return Math.round((this.state()?.actionIntervalMs ?? 0) / 1000); }
+
+  /** Toggle a validator on/off the on-chain allowlist. Disallowing one makes the agent treat it
+   *  as off-policy — it stops deploying there and redelegates any stake to an allowed validator. */
+  toggleAllow(v: ValidatorView): void {
+    const newAllowed = v.allowed === false; // currently disallowed → allow; else disallow
+    const label = `${newAllowed ? 'Allow' : 'Disallow'} ${this.short(v.publicKey)}`;
+    this.ownerAction('setvalidator', { validator: v.publicKey, allowed: newAllowed }, label);
+  }
   /** Read a number input's value, or null when empty/invalid (so 0 stays 0, blank stays null). */
   numOrNull(e: Event): number | null { const v = (e.target as HTMLInputElement).valueAsNumber; return isNaN(v) ? null : v; }
 

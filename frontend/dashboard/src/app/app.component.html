@@ -214,6 +214,29 @@
                     </div>
                   </div>
                 </div>
+
+                <!-- Allowlist (wallet-signed; disallowing one makes the agent move off it) -->
+                <div class="pt-3 border-t border-line">
+                  <p class="text-mute text-meta mb-2 uppercase tracking-wide">Allowlist <span class="normal-case text-mute/70">— which validators the agent may use</span></p>
+                  <div class="flex flex-col gap-1.5">
+                    @for (v of s?.validators ?? []; track v.publicKey) {
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="text-mini inline-flex items-baseline gap-1.5 min-w-0">
+                          @if (v.name) { <span class="font-sans text-ink truncate">{{ v.name }}</span> }
+                          <span class="font-mono text-steel shrink-0">{{ short(v.publicKey) }}</span>
+                          @if (v.allowed === false) { <span class="pill pill-bad shrink-0">removed</span> }
+                        </span>
+                        <button class="btn py-1 px-2.5 text-mini shrink-0" [class]="v.allowed === false ? 'btn-primary' : 'btn-ghost'"
+                                (click)="toggleAllow(v)" [disabled]="walletBusy()"
+                                [attr.aria-busy]="ownerBusy() === ((v.allowed === false ? 'Allow ' : 'Disallow ') + short(v.publicKey))">
+                          {{ v.allowed === false ? 'Allow' : 'Disallow' }}
+                        </button>
+                      </div>
+                    } @empty {
+                      <p class="text-mute text-meta">No validators loaded.</p>
+                    }
+                  </div>
+                </div>
               </div>
             } @else {
               <p class="text-mute text-note">
