@@ -79,6 +79,9 @@ public sealed class StakingService
             var reward = RewardMath.RewardCspr(current, principal);
             var status =
                 exiting.Contains(a.PublicKey) ? "Exit proposed — awaiting owner co-sign"
+                // Directed but no active delegation yet: a redelegation/new delegation still settling
+                // through Casper's ~7-era unbonding queue (the stake has left the source, not yet bonded).
+                : principal > 0m && current <= 0m ? "Settling (~7 eras)"
                 : principal <= 0m && current > 0m ? "Unbonding"
                 : "Delegated";
             positions.Add(new PositionView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant,
