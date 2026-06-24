@@ -14,6 +14,7 @@ builder.Services.AddSingleton<X402Client>();
 builder.Services.AddSingleton<ValidatorMonitor>();
 builder.Services.AddSingleton<ChainReader>();
 builder.Services.AddSingleton<StakingService>();
+builder.Services.AddSingleton<AllowlistStore>();
 builder.Services.AddSingleton<AuditFeed>();
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddSignalR();
@@ -278,7 +279,7 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
 }).RequireRateLimiting("cosign");
 
 // Step 2 — the wallet submitted the signed owner tx; verify it on-chain, then reflect it.
-app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault, AuditFeed feed, ILoggerFactory lf, HttpContext http) =>
+app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault, AuditFeed feed, AllowlistStore allowlist, ILoggerFactory lf, HttpContext http) =>
 {
     var log = lf.CreateLogger("Owner");
     var action = (body?.Action ?? "").Trim().ToLowerInvariant();
@@ -310,6 +311,10 @@ app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault
     // Optimistic, chain-truthful update so the dashboard reflects the action immediately — the
     // worker's next tick rebuilds the whole state from chain regardless, but its cadence is now
     // per-era, and a kill-switch must show as engaged at once. (The tx already executed on-chain.)
+    // An owner-confirmed set_validator(true) means a (possibly brand-new) validator is now on the
+    // on-chain allowlist — add it to the agent's watch-list so it actually perceives + can use it.
+    if (action == "setvalidator" && body.Allowed == true && !string.IsNullOrEmpty(body.Validator))
+        allowlist.Add(body.Validator);
     var msg = OwnerActions.ApplyEffect(feed.State, action, body);
     await feed.Push(new AuditEvent(DateTime.UtcNow.ToString("HH:mm:ss"), 0, "OWNER", msg,
         body.Validator, body.AmountCspr, r.Hash, true, DateTime.UtcNow.ToString("o")));

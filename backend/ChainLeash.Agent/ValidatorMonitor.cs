@@ -20,6 +20,7 @@ public sealed class ValidatorMonitor
 {
     private readonly IConfiguration _cfg;
     private readonly ChainReader _chain;
+    private readonly AllowlistStore _allowlistStore;
     private readonly CasperCloudRestClient _client;
     private readonly bool _mainnet;
     private readonly TimeSpan _ttl;
@@ -32,10 +33,11 @@ public sealed class ValidatorMonitor
     private Dictionary<string, string>? _names;
     private DateTime _namesAt;
 
-    public ValidatorMonitor(IConfiguration cfg, ChainReader chain)
+    public ValidatorMonitor(IConfiguration cfg, ChainReader chain, AllowlistStore allowlistStore)
     {
         _cfg = cfg;
         _chain = chain;
+        _allowlistStore = allowlistStore;
         var key = cfg["Casper:CsprCloudAccessKey"] ?? "";
         _client = new CasperCloudRestClient(new CasperCloudClientConfig(key));
         _mainnet = string.Equals(cfg["Casper:ChainName"], "casper", StringComparison.OrdinalIgnoreCase);
@@ -52,8 +54,14 @@ public sealed class ValidatorMonitor
     public readonly record struct Assessment(
         string PublicKey, int FeePercent, bool IsActive, decimal StakeCspr, bool Compliant, string Note, string? Name = null, bool Allowed = true);
 
+    /// The validators the agent WATCHES: the config seed plus any the owner added at runtime
+    /// (their on-chain allowlist status is applied separately in Assess).
     public string[] Allowlist =>
-        _cfg.GetSection("Staking:Allowlist").Get<string[]>() ?? Array.Empty<string>();
+        (_cfg.GetSection("Staking:Allowlist").Get<string[]>() ?? Array.Empty<string>())
+        .Concat(_allowlistStore.Added)
+        .Select(s => s.ToLowerInvariant())
+        .Distinct()
+        .ToArray();
 
     public int MaxCommissionPercent => _cfg.GetValue("Staking:MaxCommissionPercent", 6);
 
