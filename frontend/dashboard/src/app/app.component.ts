@@ -66,10 +66,11 @@ export class AppComponent implements OnInit, OnDestroy {
   ownerBusy = signal<string | null>(null);   // label of the in-flight owner action
   ownerError = signal<string | null>(null);
   ownerOk = signal<string | null>(null);
-  // Owner policy-panel inputs (per-action cap raise, per-validator cap, cooldown seconds).
+  // Owner policy-panel inputs (per-action cap raise, per-validator cap, cooldown seconds, add validator).
   capInput = signal<number | null>(null);
   maxValInput = signal<number | null>(null);
   cooldownInput = signal<number | null>(null);
+  addValidatorInput = signal<string>('');
 
   private conn?: signalR.HubConnection;
   private destroyed = false;
@@ -320,19 +321,33 @@ export class AppComponent implements OnInit, OnDestroy {
   // --- Owner POLICY controls (wallet-signed, owner-gated on-chain). The agent reads each from
   //     chain, so the change takes effect on its next tick. ---
   raiseCap(): void {
-    const c = this.capInput();
-    if (c === null || c <= (this.state()?.capCspr ?? 0)) { this.ownerError.set('Enter a cap HIGHER than the current one (the agent can only tighten; the owner raises).'); return; }
+    const c = this.capInput(), cur = this.state()?.capCspr ?? 0;
+    if (c === null || isNaN(c) || c <= 0) { this.ownerError.set('Enter the new per-action cap in CSPR.'); return; }
+    if (c <= cur) { this.ownerError.set(`The new cap must be HIGHER than the current ${this.fmt(cur)} CSPR — the agent can only tighten the cap; the owner raises it. To lower it, the agent does so itself.`); return; }
+    if (c > 100_000_000) { this.ownerError.set('That cap is unreasonably large. Enter a sane value.'); return; }
     this.ownerAction('raisecap', { amountCspr: c }, 'Raise cap');
   }
   setMaxVal(): void {
-    const m = this.maxValInput();
-    if (m === null || m < 0) { this.ownerError.set('Enter a per-validator cap in CSPR (0 = unlimited).'); return; }
+    const m = this.maxValInput(), cap = this.state()?.capCspr ?? 0;
+    if (m === null || isNaN(m) || m < 0) { this.ownerError.set('Enter a per-validator cap in CSPR (0 = unlimited).'); return; }
+    if (m > 0 && m < cap) { this.ownerError.set(`A per-validator cap below the per-action cap (${this.fmt(cap)} CSPR) would stop the agent completing even one move. Use 0 for unlimited, or a value ≥ the per-action cap.`); return; }
+    if (m > 1_000_000_000) { this.ownerError.set('That cap is unreasonably large. Enter a sane value (or 0 = unlimited).'); return; }
     this.ownerAction('setmaxval', { amountCspr: m }, 'Set per-validator cap');
   }
   setCooldown(): void {
     const s = this.cooldownInput();
-    if (s === null || s < 0) { this.ownerError.set('Enter a cooldown in seconds (0 = off).'); return; }
+    if (s === null || isNaN(s) || s < 0) { this.ownerError.set('Enter a cooldown in whole seconds (0 = off).'); return; }
+    if (!Number.isInteger(s)) { this.ownerError.set('Cooldown must be a whole number of seconds.'); return; }
+    if (s > 86400) { this.ownerError.set('A cooldown over 24h would effectively freeze the agent. Enter a smaller value.'); return; }
     this.ownerAction('setcooldown', { intervalSeconds: s }, 'Set cooldown');
+  }
+  /** A Casper validator public key: ed25519 (01 + 64 hex) or secp256k1 (02 + 66 hex). */
+  private isValidPubKey(k: string): boolean { return /^(01[0-9a-f]{64}|02[0-9a-f]{66})$/.test(k); }
+  addValidator(): void {
+    const k = (this.addValidatorInput() || '').trim().toLowerCase();
+    if (!this.isValidPubKey(k)) { this.ownerError.set('Enter a valid Casper validator public key — 01… (ed25519) or 02… (secp256k1).'); return; }
+    if ((this.state()?.validators ?? []).some(v => v.publicKey.toLowerCase() === k)) { this.ownerError.set("That validator is already on the agent's watch-list."); return; }
+    this.ownerAction('setvalidator', { validator: k, allowed: true }, `Add ${this.short(k)}`);
   }
   /** Current on-chain cooldown in seconds (for the policy panel's placeholder/label). */
   cooldownSeconds(): number { return Math.round((this.state()?.actionIntervalMs ?? 0) / 1000); }

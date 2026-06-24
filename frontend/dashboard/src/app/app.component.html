@@ -193,31 +193,60 @@
                 <!-- Policy controls (wallet-signed, owner-gated on-chain; agent reads each from chain) -->
                 <div class="pt-3 border-t border-line">
                   <p class="text-mute text-meta mb-2 uppercase tracking-wide">Policy <span class="normal-case text-mute/70">— signed in your wallet, takes effect next tick</span></p>
-                  <div class="flex flex-col gap-2">
-                    <div class="flex items-center gap-2">
-                      <label class="text-mini text-mute w-[7.5rem] shrink-0">Per-action cap <span class="text-mute/60">({{ fmt(s?.capCspr) }})</span></label>
-                      <input type="number" min="0" inputmode="decimal" [value]="capInput() ?? ''" (input)="capInput.set(numOrNull($event))"
-                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="raise to… CSPR" />
-                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="raiseCap()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Raise cap'">Raise</button>
+                  <div class="flex flex-col gap-3">
+                    <!-- Per-action cap -->
+                    <div>
+                      <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
+                        <span>Per-action cap</span>
+                        <span class="cursor-help text-steel/80 shrink-0" tabindex="0" role="img" aria-label="help"
+                              title="The most CSPR the agent can move (delegate / undelegate / redelegate) in a SINGLE transaction. Any larger move must be escalated to a human co-signed 'material' proposal. The agent can only TIGHTEN (lower) this; only you (the owner) can raise it — this bounds the blast radius of any one agent action.">ⓘ</span>
+                        <span class="ml-auto text-mute/60">now {{ fmt(s?.capCspr) }} CSPR</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <input type="number" min="0" inputmode="decimal" [value]="capInput() ?? ''" (input)="capInput.set(numOrNull($event))"
+                               class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="raise above {{ fmt(s?.capCspr) }} CSPR" />
+                        <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="raiseCap()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Raise cap'">Raise</button>
+                      </div>
                     </div>
-                    <div class="flex items-center gap-2">
-                      <label class="text-mini text-mute w-[7.5rem] shrink-0">Per-validator cap <span class="text-mute/60">({{ s?.maxPerValidatorCspr ? fmt(s?.maxPerValidatorCspr) : '∞' }})</span></label>
-                      <input type="number" min="0" inputmode="decimal" [value]="maxValInput() ?? ''" (input)="maxValInput.set(numOrNull($event))"
-                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="CSPR (0 = ∞)" />
-                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setMaxVal()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set per-validator cap'">Set</button>
+                    <!-- Per-validator cap -->
+                    <div>
+                      <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
+                        <span>Per-validator cap</span>
+                        <span class="cursor-help text-steel/80 shrink-0" tabindex="0" role="img" aria-label="help"
+                              title="The most total CSPR the agent may concentrate on any ONE validator (0 = unlimited). This enforces decentralization — the agent must spread stake across validators instead of piling it onto one. A delegation that would push a validator above this is rejected on-chain.">ⓘ</span>
+                        <span class="ml-auto text-mute/60">now {{ s?.maxPerValidatorCspr ? fmt(s?.maxPerValidatorCspr) + ' CSPR' : 'unlimited' }}</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <input type="number" min="0" inputmode="decimal" [value]="maxValInput() ?? ''" (input)="maxValInput.set(numOrNull($event))"
+                               class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="CSPR per validator (0 = ∞)" />
+                        <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setMaxVal()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set per-validator cap'">Set</button>
+                      </div>
                     </div>
-                    <div class="flex items-center gap-2">
-                      <label class="text-mini text-mute w-[7.5rem] shrink-0">Cooldown <span class="text-mute/60">({{ cooldownSeconds() }}s)</span></label>
-                      <input type="number" min="0" inputmode="numeric" [value]="cooldownInput() ?? ''" (input)="cooldownInput.set(numOrNull($event))"
-                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="seconds (0 = off)" />
-                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setCooldown()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set cooldown'">Set</button>
+                    <!-- Cooldown -->
+                    <div>
+                      <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
+                        <span>Cooldown</span>
+                        <span class="cursor-help text-steel/80 shrink-0" tabindex="0" role="img" aria-label="help"
+                              title="The minimum time the agent must wait between on-chain moves (anti-thrash). At 30s it can't make two delegations/redelegations within 30 seconds — so a buggy or compromised agent can't rapidly churn the stake, which would burn gas and trigger Casper's ~7-era unbonding. 0 = no cooldown.">ⓘ</span>
+                        <span class="ml-auto text-mute/60">now {{ cooldownSeconds() }}s</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <input type="number" min="0" step="1" inputmode="numeric" [value]="cooldownInput() ?? ''" (input)="cooldownInput.set(numOrNull($event))"
+                               class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="seconds between moves (0 = off)" />
+                        <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setCooldown()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set cooldown'">Set</button>
+                      </div>
                     </div>
                   </div>
                 </div>
 
                 <!-- Allowlist (wallet-signed; disallowing one makes the agent move off it) -->
                 <div class="pt-3 border-t border-line">
-                  <p class="text-mute text-meta mb-2 uppercase tracking-wide">Allowlist <span class="normal-case text-mute/70">— which validators the agent may use</span></p>
+                  <p class="text-mute text-meta mb-2 uppercase tracking-wide flex items-center gap-1.5">
+                    <span>Allowlist</span>
+                    <span class="cursor-help text-steel/80 shrink-0 normal-case" tabindex="0" role="img" aria-label="help"
+                          title="The validators the agent is permitted to stake to. The contract REJECTS any delegation to a validator not on this list. Disallowing one that holds stake makes the agent treat it as off-policy and redelegate that stake to an allowed validator. Add a new validator by its public key below.">ⓘ</span>
+                    <span class="normal-case text-mute/70">— which validators the agent may use</span>
+                  </p>
                   <div class="flex flex-col gap-1.5">
                     @for (v of s?.validators ?? []; track v.publicKey) {
                       <div class="flex items-center justify-between gap-2">
@@ -235,6 +264,12 @@
                     } @empty {
                       <p class="text-mute text-meta">No validators loaded.</p>
                     }
+                    <!-- Add a brand-new validator: signs set_validator(true) + adds it to the agent's watch-list -->
+                    <div class="flex items-center gap-2 pt-1.5 mt-1 border-t border-line/60">
+                      <input type="text" spellcheck="false" autocomplete="off" [value]="addValidatorInput()" (input)="addValidatorInput.set($any($event.target).value)"
+                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="add validator public key (01…)" />
+                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="addValidator()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === ('Add ' + short(addValidatorInput().trim().toLowerCase()))">Add</button>
+                    </div>
                   </div>
                 </div>
               </div>
