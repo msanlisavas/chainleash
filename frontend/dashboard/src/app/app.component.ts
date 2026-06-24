@@ -10,6 +10,7 @@ import { GuaranteeComponent } from './ui/guarantee.component';
 import { StatCardComponent } from './ui/stat-card.component';
 import { DeployComponent } from './ui/deploy.component';
 import { SiteFooterComponent } from './ui/site-footer.component';
+import { PositionsComponent, Staking } from './ui/positions.component';
 
 interface AuditEvent {
   time: string; tick: number; kind: string; message: string;
@@ -35,7 +36,7 @@ interface FeedState {
     selector: 'app-root',
     imports: [
         NavBarComponent, HeroComponent, HowItWorksComponent,
-        GuaranteeComponent, StatCardComponent, DeployComponent, SiteFooterComponent,
+        GuaranteeComponent, StatCardComponent, PositionsComponent, DeployComponent, SiteFooterComponent,
     ],
     templateUrl: './app.component.html',
     styleUrl: './app.component.scss'
@@ -47,6 +48,7 @@ export class AppComponent implements OnInit, OnDestroy {
   events = signal<AuditEvent[]>([]);
   state = signal<FeedState | null>(null);
   config = signal<AppConfig | null>(null);
+  staking = signal<Staking | null>(null);
   /** Honest connection status: the dashboard NEVER silently gives up reconnecting. */
   link = signal<'connecting' | 'live' | 'reconnecting' | 'offline'>('connecting');
   loadError = signal(false);
@@ -71,6 +73,7 @@ export class AppComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.loadState();
     this.loadConfig();
+    this.loadStaking();
 
     this.conn = new signalR.HubConnectionBuilder()
       .withUrl(`${this.api}/hub/audit`)
@@ -80,7 +83,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.conn.on('audit', (e: AuditEvent) => this.events.update(list => [e, ...list].slice(0, 200)));
     this.conn.on('state', (s: FeedState) => this.state.set(s));
     this.conn.onreconnecting(() => this.link.set('reconnecting'));
-    this.conn.onreconnected(() => { this.link.set('live'); this.loadState(); }); // re-sync after an outage
+    this.conn.onreconnected(() => { this.link.set('live'); this.loadState(); this.loadStaking(); }); // re-sync after an outage
     // withAutomaticReconnect gives up after ~4 attempts; onclose hands over to our own
     // endless retry loop so an outage never permanently kills the dashboard.
     this.conn.onclose(() => this.scheduleRestart());
@@ -133,6 +136,14 @@ export class AppComponent implements OnInit, OnDestroy {
     this.http.get<AppConfig>(`${this.api}/api/config`).subscribe({
       next: cfg => { this.config.set(cfg); if (cfg.walletCoSignEnabled) this.wallet.init(cfg); },
       error: () => { /* config optional; co-sign UI degrades to disabled */ }
+    });
+  }
+
+  /** Fetch the vault's staking positions + rewards (per-era data; reloads on connect). */
+  private loadStaking(): void {
+    this.http.get<Staking>(`${this.api}/api/staking`).subscribe({
+      next: s => this.staking.set(s),
+      error: () => { /* staking view optional; degrades to a loading line */ }
     });
   }
 
