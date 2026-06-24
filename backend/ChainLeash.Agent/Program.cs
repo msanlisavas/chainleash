@@ -16,6 +16,7 @@ builder.Services.AddSingleton<ChainReader>();
 builder.Services.AddSingleton<StakingService>();
 builder.Services.AddSingleton<ValidatorDirectory>();
 builder.Services.AddSingleton<AllowlistStore>();
+builder.Services.AddSingleton<CommissionStore>();
 builder.Services.AddSingleton<AuditFeed>();
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddSignalR();
@@ -269,6 +270,7 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
             "setmaxval"  => vault.PrepareSetMaxPerValidator(OwnerActions.ToMotesAllowZero(body!.AmountCspr)),
             "setcooldown"=> vault.PrepareSetActionInterval(OwnerActions.ToMs(body!.IntervalSeconds)),
             "setvalidator" => vault.PrepareSetValidator(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), body.Allowed ?? false),
+            "setcommission" => vault.PrepareSetMaxCommission((uint)OwnerActions.RequirePercent(body!.Percent)),
             _            => throw new ArgumentException("unknown action"),
         };
         return Results.Content("{\"transactionJson\":" + json + ",\"ownerPublicKey\":\"" + vault.OwnerKey.ToAccountHex() + "\"}", "application/json");
@@ -285,7 +287,7 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
 }).RequireRateLimiting("cosign");
 
 // Step 2 — the wallet submitted the signed owner tx; verify it on-chain, then reflect it.
-app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault, AuditFeed feed, AllowlistStore allowlist, ILoggerFactory lf, HttpContext http) =>
+app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault, AuditFeed feed, AllowlistStore allowlist, CommissionStore commission, ILoggerFactory lf, HttpContext http) =>
 {
     var log = lf.CreateLogger("Owner");
     var action = (body?.Action ?? "").Trim().ToLowerInvariant();
@@ -321,6 +323,9 @@ app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault
     // on-chain allowlist — add it to the agent's watch-list so it actually perceives + can use it.
     if (action == "setvalidator" && body.Allowed == true && !string.IsNullOrEmpty(body.Validator))
         allowlist.Add(body.Validator);
+    // The on-chain set_max_commission is the auditable authorization; the agent reads the value here
+    // (the upgrade-added Odra field isn't reliably raw-readable), recorded only on a verified confirm.
+    if (action == "setcommission" && body.Percent is { } pct) commission.Set(pct);
     var msg = OwnerActions.ApplyEffect(feed.State, action, body);
     await feed.Push(new AuditEvent(DateTime.UtcNow.ToString("HH:mm:ss"), 0, "OWNER", msg,
         body.Validator, body.AmountCspr, r.Hash, true, DateTime.UtcNow.ToString("o")));
@@ -337,8 +342,8 @@ record ConfirmReq(string TxHash);
 
 // Bodies for the owner-direct controls. `Action` selects the owner-gated entry point; the rest
 // are the action's params (CSPR amount, validator(s), proposal id) — only those it needs are set.
-record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds, bool? Allowed);
-record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds, bool? Allowed);
+record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds, bool? Allowed, int? Percent);
+record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds, bool? Allowed, int? Percent);
 
 /// Server-side whitelist + effects for the owner-direct controls. Keeping the action→entry-point
 /// map here (not client-supplied) means /confirm always verifies the entry point the action
@@ -356,6 +361,7 @@ static class OwnerActions
         "setmaxval"          => "set_max_per_validator",
         "setcooldown"        => "set_action_interval",
         "setvalidator"       => "set_validator",
+        "setcommission"      => "set_max_commission",
         _                    => null,
     };
 
@@ -384,6 +390,8 @@ static class OwnerActions
     }
 
     public static int RequireId(int? id) => id is { } v && v >= 0 ? v : throw new ArgumentException("missing or invalid id");
+
+    public static int RequirePercent(int? p) => p is { } v && v is >= 0 and <= 100 ? v : throw new ArgumentException("commission % must be between 0 and 100");
 
     public static string RequireHex(string? hex) =>
         !string.IsNullOrWhiteSpace(hex) && hex.All(Uri.IsHexDigit) ? hex : throw new ArgumentException("missing or invalid validator key");
@@ -433,6 +441,10 @@ static class OwnerActions
                     s.Validators = s.Validators.Select(v => string.Equals(v.PublicKey, body.Validator, StringComparison.OrdinalIgnoreCase)
                         ? v with { Allowed = allow } : v).ToList();
                 return $"Owner {(allow ? "allowed" : "removed")} validator {Short(body.Validator)} {(allow ? "on" : "from")} the allowlist.";
+            case "setcommission":
+                var pct = body.Percent ?? 0;
+                s.MaxCommissionPercent = pct;
+                return $"Owner set the commission threshold to ≤ {pct}%.";
             default:
                 return "Owner action confirmed on-chain.";
         }

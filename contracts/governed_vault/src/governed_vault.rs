@@ -134,6 +134,10 @@ pub struct ActionIntervalSet {
     pub interval_ms: u64,
 }
 #[odra::event]
+pub struct MaxCommissionSet {
+    pub percent: u32,
+}
+#[odra::event]
 pub struct Initialized {
     pub agent: Address,
     pub owner: Address,
@@ -179,6 +183,9 @@ pub struct GovernedVault {
     min_action_interval: Var<u64>,    // ms cooldown between agent moves (0 = disabled) — anti-thrash
     last_action_time: Var<u64>,       // block time (ms) of the agent's last move
     committed: Mapping<PublicKey, U512>, // vault's own directed stake per validator (lag-free cap basis)
+    max_commission_percent: Var<u32>, // owner-set: the max validator commission the agent treats as
+                                      // compliant. The agent READS this from chain (0 = unset → it
+                                      // falls back to its configured default). Added in the v3 upgrade.
 }
 
 #[odra::module]
@@ -407,6 +414,15 @@ impl GovernedVault {
         self.env().emit_event(ActionIntervalSet { interval_ms });
     }
 
+    /// Owner sets the maximum validator commission (in whole percent) the agent may treat as
+    /// compliant. The agent reads this from chain each tick, so a change takes effect promptly.
+    /// This is the agent's SCORING policy — the contract itself doesn't gate on commission.
+    pub fn set_max_commission(&mut self, percent: u32) {
+        self.assert_owner();
+        self.max_commission_percent.set(percent);
+        self.env().emit_event(MaxCommissionSet { percent });
+    }
+
     /// Owner records an on-chain policy violation (audit log; no bond movement).
     pub fn record_violation(&mut self, reason: String) {
         self.assert_owner();
@@ -540,6 +556,9 @@ impl GovernedVault {
     }
     pub fn action_interval(&self) -> u64 {
         self.min_action_interval.get_or_default()
+    }
+    pub fn max_commission_percent(&self) -> u32 {
+        self.max_commission_percent.get_or_default()
     }
     pub fn committed_to(&self, validator: PublicKey) -> U512 {
         self.committed.get_or_default(&validator)
@@ -980,6 +999,17 @@ mod tests {
         env.set_caller(owner);
         vault.raise_cap(u(2000));
         assert_eq!(vault.value_cap(), u(2000));
+    }
+
+    #[test]
+    fn only_owner_sets_max_commission() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup();
+        assert_eq!(vault.max_commission_percent(), 0); // unset → 0 (the agent falls back to its config default)
+        env.set_caller(agent);
+        assert_eq!(vault.try_set_max_commission(5), Err(Error::NotOwner.into()));
+        env.set_caller(owner);
+        vault.set_max_commission(5);
+        assert_eq!(vault.max_commission_percent(), 5);
     }
 
     #[test]

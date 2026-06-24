@@ -321,6 +321,7 @@ public sealed class AgentWorker : BackgroundService
         s.Actions = _actions;
         s.Buys = _buys;
         s.CapCspr = cap;
+        s.MaxCommissionPercent = _validators.EffectiveMaxCommission(); // owner wallet-set threshold if set, else config
         s.Paused = paused;
         s.FreeBalanceCspr = free;
         s.TotalBalanceCspr = total; // already read this tick — don't re-fetch

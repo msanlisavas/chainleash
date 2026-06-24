@@ -194,6 +194,19 @@
                 <div class="pt-3 border-t border-line">
                   <p class="text-mute text-meta mb-2 uppercase tracking-wide">Policy <span class="normal-case text-mute/70">— signed in your wallet, takes effect next tick</span></p>
                   <div class="flex flex-col gap-3">
+                    <!-- Commission threshold -->
+                    <div>
+                      <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
+                        <span>Commission threshold</span>
+                        <app-info text="The maximum validator commission the agent treats as compliant. Validators above it are 'off policy' — the agent won't stake to them, and redelegates away any stake on one that drifts over. This is the agent's scoring rule; it now lives on-chain and the agent reads it each tick." />
+                        <span class="ml-auto text-mute/60">now ≤ {{ s?.maxCommissionPercent ?? '—' }}%</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <input type="number" min="0" max="100" step="1" inputmode="numeric" [value]="commissionInput() ?? ''" (input)="commissionInput.set(numOrNull($event))"
+                               class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="max commission % (0–100)" />
+                        <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setCommission()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set commission threshold'">Set</button>
+                      </div>
+                    </div>
                     <!-- Per-action cap -->
                     <div>
                       <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">

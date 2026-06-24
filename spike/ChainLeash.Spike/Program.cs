@@ -53,6 +53,7 @@ try
         case "vault-set-agent": await VaultSetAgent(); break;
         case "vault-pause": await VaultPause(); break;
         case "vault-set-maxval": await VaultSetMaxVal(); break;
+        case "vault-set-commission": await VaultSetCommission(); break;
         case "vault-set-interval": await VaultSetInterval(); break;
         case "vault-deposit": await VaultDeposit(); break;
         case "vault-delegate": await VaultDelegate(); break;
@@ -799,6 +800,22 @@ async Task VaultSetInterval()
         .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(5_000_000_000UL, 1).Build();
     tx.Sign(humanKp);
     await Submit(Rpc(cfg), tx, $"Owner sets action cooldown = {ms} ms");
+}
+
+// Owner sets the agent commission threshold (whole percent). usage: vault-set-commission <pkg> <percent>
+async Task VaultSetCommission()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-set-commission <package-hash> <percent>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var pct = uint.Parse(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null).EntryPoint("set_max_commission")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("percent", CLValue.U32(pct)) })
+        .From(humanKp.PublicKey).ChainName(cfg["ChainName"]!).Payment(5_000_000_000UL, 1).Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner sets commission threshold = {pct}%");
 }
 
 // Owner (human key, weight 3) allowlists a validator on the GovernedVault.

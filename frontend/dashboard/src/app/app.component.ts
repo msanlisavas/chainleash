@@ -72,6 +72,7 @@ export class AppComponent implements OnInit, OnDestroy {
   capInput = signal<number | null>(null);
   maxValInput = signal<number | null>(null);
   cooldownInput = signal<number | null>(null);
+  commissionInput = signal<number | null>(null);
   validatorSearch = signal<string>('');
   availableValidators = signal<DirectoryValidator[]>([]);
 
@@ -352,6 +353,11 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!Number.isInteger(s)) { this.ownerError.set('Cooldown must be a whole number of seconds.'); return; }
     if (s > 86400) { this.ownerError.set('A cooldown over 24h would effectively freeze the agent. Enter a smaller value.'); return; }
     this.ownerAction('setcooldown', { intervalSeconds: s }, 'Set cooldown');
+  }
+  setCommission(): void {
+    const p = this.commissionInput();
+    if (p === null || isNaN(p) || !Number.isInteger(p) || p < 0 || p > 100) { this.ownerError.set('Enter a commission threshold as a whole number from 0 to 100 (%).'); return; }
+    this.ownerAction('setcommission', { percent: p }, 'Set commission threshold');
   }
   /** A Casper validator public key: ed25519 (01 + 64 hex) or secp256k1 (02 + 66 hex). */
   private isValidPubKey(k: string): boolean { return /^(01[0-9a-f]{64}|02[0-9a-f]{66})$/.test(k); }

@@ -223,6 +223,11 @@ public sealed class CasperVault
         BuildUnsignedOwnerTxJson("set_action_interval",
             new List<NamedArg> { new NamedArg("interval_ms", CLValue.U64(intervalMs)) }, 5_000_000_000UL);
 
+    /// Owner sets the agent's commission threshold (whole percent). The agent reads it from chain.
+    public string PrepareSetMaxCommission(uint percent) =>
+        BuildUnsignedOwnerTxJson("set_max_commission",
+            new List<NamedArg> { new NamedArg("percent", CLValue.U32(percent)) }, 5_000_000_000UL);
+
     /// Owner allows (true) or removes (false) a validator from the on-chain allowlist.
     public string PrepareSetValidator(PublicKey validator, bool allowed) =>
         BuildUnsignedOwnerTxJson("set_validator", new List<NamedArg>

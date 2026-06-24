@@ -21,6 +21,7 @@ public sealed class ValidatorMonitor
     private readonly IConfiguration _cfg;
     private readonly ChainReader _chain;
     private readonly AllowlistStore _allowlistStore;
+    private readonly CommissionStore _commissionStore;
     private readonly CasperCloudRestClient _client;
     private readonly bool _mainnet;
     private readonly TimeSpan _ttl;
@@ -33,11 +34,12 @@ public sealed class ValidatorMonitor
     private Dictionary<string, string>? _names;
     private DateTime _namesAt;
 
-    public ValidatorMonitor(IConfiguration cfg, ChainReader chain, AllowlistStore allowlistStore)
+    public ValidatorMonitor(IConfiguration cfg, ChainReader chain, AllowlistStore allowlistStore, CommissionStore commissionStore)
     {
         _cfg = cfg;
         _chain = chain;
         _allowlistStore = allowlistStore;
+        _commissionStore = commissionStore;
         var key = cfg["Casper:CsprCloudAccessKey"] ?? "";
         _client = new CasperCloudRestClient(new CasperCloudClientConfig(key));
         _mainnet = string.Equals(cfg["Casper:ChainName"], "casper", StringComparison.OrdinalIgnoreCase);
@@ -72,23 +74,32 @@ public sealed class ValidatorMonitor
     {
         var metrics = await Metrics(ct);
         if (metrics.Count == 0) return metrics;
+        var max = EffectiveMaxCommission(); // owner's wallet-set threshold if set, else config
         var adjusted = new List<Assessment>(metrics.Count);
         foreach (var m in metrics)
         {
+            // Both the commission threshold and the allowlist are owner-controlled and read FRESH,
+            // so changing either takes effect next tick (not after the per-era metric cache).
             // IsValidatorAllowed is fail-safe (true on any read error/unset) — a hiccup can never
             // make the agent treat its own validators as off-policy and churn their stake.
             var allowed = await _chain.IsValidatorAllowed(m.PublicKey);
-            adjusted.Add(allowed
-                ? m with { Allowed = true }
-                : m with { Allowed = false, Compliant = false, Note = "removed from the allowlist by the owner" });
+            var compliant = allowed && StakingPolicy.IsCompliant(m.FeePercent, m.IsActive, max);
+            var note = !allowed ? "removed from the allowlist by the owner"
+                     : m.FeePercent < 0 ? m.Note // preserve "not in current era set"
+                     : StakingPolicy.ComplianceNote(m.FeePercent, m.IsActive, max);
+            adjusted.Add(m with { Compliant = compliant, Note = note, Allowed = allowed });
         }
-        // Re-order with the allowlist applied: compliant first, then lowest fee, then more stake.
+        // Re-order with the live policy applied: compliant first, then lowest fee, then more stake.
         return adjusted
             .OrderByDescending(a => a.Compliant)
             .ThenBy(a => a.FeePercent < 0 ? int.MaxValue : a.FeePercent)
             .ThenByDescending(a => a.StakeCspr)
             .ToList();
     }
+
+    /// The agent's effective commission threshold: the owner's wallet-set value (recorded after the
+    /// on-chain set_max_commission tx is verified) if set, else the configured default.
+    public int EffectiveMaxCommission() => _commissionStore.Value ?? MaxCommissionPercent;
 
     /// Live CSPR.cloud metrics + commission/active verdict per validator (the on-chain allowlist is
     /// layered on in Assess). Served from cache within the TTL; a transient CSPR.cloud failure
