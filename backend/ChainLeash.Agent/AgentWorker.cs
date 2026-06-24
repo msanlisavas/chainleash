@@ -328,6 +328,7 @@ public sealed class AgentWorker : BackgroundService
         try
         {
             s.MaxPerValidatorCspr = await _chain.MaxPerValidatorCspr(); // long-TTL cached in ChainReader
+            s.ActionIntervalMs = await _chain.ActionIntervalMs();       // long-TTL cached in ChainReader
             s.Violations = (int)await _chain.Violations();              // long-TTL cached in ChainReader
             // Agent gas changes only when the agent spends — refresh ~hourly (every Nth tick), keeping
             // the last value otherwise; the low-gas warning is edge-triggered so this is ample.

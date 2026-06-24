@@ -258,6 +258,9 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
             "undelegate" => vault.PrepareOwnerUndelegate(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), OwnerActions.ToMotes(body.AmountCspr)),
             "redelegate" => vault.PrepareOwnerRedelegate(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), PublicKey.FromHexString(OwnerActions.RequireHex(body.NewValidator)), OwnerActions.ToMotes(body.AmountCspr)),
             "reject"     => vault.PrepareRejectMaterial((uint)OwnerActions.RequireId(body!.Id)),
+            "raisecap"   => vault.PrepareRaiseCap(OwnerActions.ToMotes(body!.AmountCspr)),
+            "setmaxval"  => vault.PrepareSetMaxPerValidator(OwnerActions.ToMotesAllowZero(body!.AmountCspr)),
+            "setcooldown"=> vault.PrepareSetActionInterval(OwnerActions.ToMs(body!.IntervalSeconds)),
             _            => throw new ArgumentException("unknown action"),
         };
         return Results.Content("{\"transactionJson\":" + json + ",\"ownerPublicKey\":\"" + vault.OwnerKey.ToAccountHex() + "\"}", "application/json");
@@ -322,8 +325,8 @@ record ConfirmReq(string TxHash);
 
 // Bodies for the owner-direct controls. `Action` selects the owner-gated entry point; the rest
 // are the action's params (CSPR amount, validator(s), proposal id) — only those it needs are set.
-record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id);
-record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id);
+record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds);
+record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds);
 
 /// Server-side whitelist + effects for the owner-direct controls. Keeping the action→entry-point
 /// map here (not client-supplied) means /confirm always verifies the entry point the action
@@ -337,6 +340,9 @@ static class OwnerActions
         "undelegate"         => "owner_undelegate",
         "redelegate"         => "owner_redelegate",
         "reject"             => "reject_material",
+        "raisecap"           => "raise_cap",
+        "setmaxval"          => "set_max_per_validator",
+        "setcooldown"        => "set_action_interval",
         _                    => null,
     };
 
@@ -346,6 +352,22 @@ static class OwnerActions
         var motes = decimal.Truncate(v * 1_000_000_000m);
         if (motes > ulong.MaxValue) throw new ArgumentException("amount too large");
         return (ulong)motes;
+    }
+
+    /// Like ToMotes but allows 0 (e.g. set the per-validator cap to 0 = unlimited).
+    public static ulong ToMotesAllowZero(decimal? cspr)
+    {
+        if (cspr is not { } v || v < 0) throw new ArgumentException("amount must be ≥ 0");
+        var motes = decimal.Truncate(v * 1_000_000_000m);
+        if (motes > ulong.MaxValue) throw new ArgumentException("amount too large");
+        return (ulong)motes;
+    }
+
+    /// Cooldown seconds → milliseconds (0 = disabled).
+    public static ulong ToMs(int? seconds)
+    {
+        if (seconds is not { } s || s < 0) throw new ArgumentException("cooldown must be ≥ 0 seconds");
+        return (ulong)s * 1000;
     }
 
     public static int RequireId(int? id) => id is { } v && v >= 0 ? v : throw new ArgumentException("missing or invalid id");
@@ -382,6 +404,16 @@ static class OwnerActions
                 if (body.Id is { } id and >= 0)
                     s.Proposals = s.Proposals.Select(p => p.Id == (uint)id ? p with { Resolved = true } : p).ToList();
                 return $"Owner rejected material proposal #{body.Id} — resolved without executing.";
+            case "raisecap":
+                s.CapCspr = amt;
+                return $"Owner raised the per-action cap to {amt:N0} CSPR.";
+            case "setmaxval":
+                s.MaxPerValidatorCspr = amt;
+                return amt > 0 ? $"Owner set the per-validator cap to {amt:N0} CSPR." : "Owner removed the per-validator cap (unlimited).";
+            case "setcooldown":
+                var secs = body.IntervalSeconds ?? 0;
+                s.ActionIntervalMs = (ulong)(secs < 0 ? 0 : secs) * 1000;
+                return secs > 0 ? $"Owner set the action cooldown to {secs}s." : "Owner disabled the action cooldown.";
             default:
                 return "Owner action confirmed on-chain.";
         }

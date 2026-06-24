@@ -204,6 +204,25 @@ public sealed class CasperVault
         BuildUnsignedOwnerTxJson("reject_material",
             new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) }, 5_000_000_000UL);
 
+    // --- Owner POLICY controls (pure-state owner calls, ~5 CSPR each). The agent reads each of
+    // these straight from chain, so a wallet-signed change takes effect on the next tick. ---
+
+    /// Owner RAISES the per-action cap (the contract permits only the owner to raise it; the
+    /// agent may tighten). Reverts (CapNotHigher) if the new cap isn't strictly higher.
+    public string PrepareRaiseCap(ulong newCapMotes) =>
+        BuildUnsignedOwnerTxJson("raise_cap",
+            new List<NamedArg> { new NamedArg("new_cap", CLValue.U512(newCapMotes)) }, 5_000_000_000UL);
+
+    /// Owner sets the per-validator concentration cap (0 = unlimited).
+    public string PrepareSetMaxPerValidator(ulong maxMotes) =>
+        BuildUnsignedOwnerTxJson("set_max_per_validator",
+            new List<NamedArg> { new NamedArg("max", CLValue.U512(maxMotes)) }, 5_000_000_000UL);
+
+    /// Owner sets the anti-thrash cooldown between agent moves, in milliseconds (0 = disabled).
+    public string PrepareSetActionInterval(ulong intervalMs) =>
+        BuildUnsignedOwnerTxJson("set_action_interval",
+            new List<NamedArg> { new NamedArg("interval_ms", CLValue.U64(intervalMs)) }, 5_000_000_000UL);
+
     /// Confirm a wallet-submitted co-sign: verify on-chain that the tx executed
     /// successfully AND that it genuinely called approve_material(id) on THIS vault — so a
     /// random successful tx hash can't forge a "co-signed" audit entry. Because

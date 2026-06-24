@@ -45,6 +45,7 @@ public sealed class FeedState
     public decimal FreeBalanceCspr { get; set; }    // withdrawable (liquid − bond)
     public decimal TotalBalanceCspr { get; set; }   // liquid vault purse
     public decimal MaxPerValidatorCspr { get; set; }// per-validator ceiling (0 = unlimited)
+    public ulong ActionIntervalMs { get; set; }     // anti-thrash cooldown between agent moves (0 = disabled)
     public int Violations { get; set; }
     public decimal AgentGasCspr { get; set; }       // agent account balance (pays tx gas) — ops/health
     public bool Stale { get; set; }                 // true if the last chain read failed (values may be stale)
