@@ -58,7 +58,7 @@ agent's payments.
 docker build -t chainleash-odra tools/odra-build
 docker run --rm -v "$PWD/contracts/governed_vault:/work" \
   -v chainleash-cargo-registry:/usr/local/cargo/registry chainleash-odra \
-  bash /work/deploy.sh        # cargo test (39/39) + cargo odra build -> wasm/GovernedVault.wasm
+  bash /work/deploy.sh        # cargo test (43/43) + cargo odra build -> wasm/GovernedVault.wasm
 ```
 
 ## 2. Deploy + arm your own vault — one command
@@ -136,6 +136,12 @@ The leash state (cap, bond, per-validator cap, balances, paused, violations) is 
 }
 ```
 
+`MaxCommissionPercent` and `Allowlist` here are only the **starting** policy: once the
+vault is live the owner retunes the commission threshold, the per-action cap, the
+per-validator cap and the cooldown, and adds/removes allowlisted validators, **on-chain
+from the dashboard** — each change signed in the owner's own wallet (the agent reads the
+new policy on its next tick).
+
 **Multi-tenant:** the agent is config-driven, so one agent process serves one vault per
 config; run several (or several configs) to manage many vaults. `scripts/onboard.ps1`
 writes a fresh config per vault.
@@ -208,20 +214,28 @@ ongoing task is **agent gas**: `/health` flags `lowGas`; top up from the
   `approve_material` tx, you sign in-browser, and the agent confirms it on-chain. (CLI
   equivalent: `vault-approve <pkg> <id>`. The dashboard's `dev: server-key co-sign` button
   appears only if `Casper:AllowServerKeyCoSign` is enabled.)
-- **Rebalance on policy breach** — tighten the policy (`MaxCommissionPercent: 4`) so a
-  delegated validator at 5% becomes off-policy; the agent **redelegates** its stake to the
-  best compliant validator in one native tx (or undelegates if none qualify).
-- **Kill-switch** — `vault-pause <pkg> true` → the dashboard shows a red banner and every
-  agent move is rejected on-chain (`Paused`) until the owner unpauses.
+- **Manage policy from the dashboard** — connect the owner wallet and use the on-chain
+  control panel to set the per-action cap, per-validator cap, cooldown or **max-commission
+  threshold**, or add/remove an allowlisted validator. Each is an owner-signed transaction;
+  the agent picks up the new policy on its next tick. (CLI equivalents exist too, e.g.
+  `vault-set-commission <pkg> <percent>`, `vault-set-validator <pkg> <valHex> true`.)
+- **Rebalance on policy breach** — tighten the commission threshold (e.g. to 4% from the
+  dashboard, or `MaxCommissionPercent: 4` in config) so a delegated validator at 5% becomes
+  off-policy; the agent **redelegates** its stake to the best compliant validator in one
+  native tx (or undelegates if none qualify).
+- **Kill-switch** — from the dashboard (owner wallet) or `vault-pause <pkg> true` → the
+  dashboard shows a red banner and every agent move is rejected on-chain (`Paused`) until
+  the owner unpauses.
 
 ## 5. Tests
 
 ```bash
-dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (59)
-cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (headless)
+dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (86)
+cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (12, headless)
+# contract suite (43) runs in the chainleash-odra container — see section 1
 ```
 
-CI (`.github/workflows/ci.yml`) runs both on every push/PR.
+CI (`.github/workflows/ci.yml`) runs the backend, frontend, and contract suites on every push/PR.
 
 ## Live deployment + on-chain artifacts
 

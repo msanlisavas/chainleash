@@ -28,8 +28,11 @@ its own cap, never raise it).
 
 **Owner:** `approve_material`, `reject_material` (resolve a pending proposal *without*
 executing it — works even while paused), `raise_cap`, `set_validator`, `set_paused`
-(kill-switch), `set_max_per_validator`, `set_action_interval`, `record_violation`,
-`slash_bond`, `return_bond`, `withdraw`, `transfer_ownership`, `set_agent`.
+(kill-switch), `set_max_per_validator`, `set_action_interval`, `set_max_commission`
+(the agent's max-commission policy threshold), `owner_undelegate` / `owner_redelegate`
+(emergency recall of staked CSPR — unbounded full-exit escape hatch, allowed while
+paused), `record_violation`, `slash_bond`, `return_bond`, `withdraw`,
+`transfer_ownership`, `set_agent`.
 
 **Installer:** `init` (constructor, auto), `initialize(agent, owner, value_cap)` —
 rejects `agent == owner` (the roles must never collapse into one key; `set_agent` and
@@ -42,8 +45,8 @@ pooled bond on `return_bond`.
 
 **Views (gas-free):** `get_agent`, `get_owner`, `value_cap`, `bond`, `violations`,
 `is_validator_allowed`, `delegated_to`, `committed_to`, `is_paused`, `max_per_validator`,
-`action_interval`, `get_proposal`, `next_proposal_id`, `total_balance`, `free_balance`,
-`get_installer`, `is_initialized`, `get_bond_holder`.
+`action_interval`, `max_commission_percent`, `get_proposal`, `next_proposal_id`,
+`total_balance`, `free_balance`, `get_installer`, `is_initialized`, `get_bond_holder`.
 
 ## The leash (enforced invariants)
 
@@ -72,9 +75,12 @@ reserves 64536+ for its own framework errors, e.g. 64658 = MissingArg.)
 Linux container (see the [RUNBOOK](../../RUNBOOK.md)):
 
 ```
-cargo test               # 39/39
+cargo test               # 43/43
 cargo odra build         # -> wasm/GovernedVault.wasm (~295 KB)
 ```
 
 Deploy is via the C# SDK (`SessionBuilder.Wasm(...).InstallOrUpgrade()`); `initialize` is
-called separately after install. See the RUNBOOK and `scripts/onboard.ps1`.
+called separately after install. The contract is **upgraded in place** (Odra 2.7) — a new
+contract version under the same package preserves the vault's state and purse, so policy
+entry points (owner recall, the commission threshold) were added without redeploying or
+moving funds. See the RUNBOOK and `scripts/onboard.ps1`.

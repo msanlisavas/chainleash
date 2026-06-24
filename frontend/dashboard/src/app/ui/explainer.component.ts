@@ -22,7 +22,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
         An agent that can move money, but can’t steal it.
       </h2>
       <p class="mt-3 text-steel text-body leading-relaxed max-w-[62ch]">
-        Two minutes on the leash: the agent proposing real CSPR staking moves on testnet,
+        A walkthrough of the leash: the agent proposing real CSPR staking moves on testnet,
         Casper bounding every one on-chain, and a human co-signing the material ones.
       </p>
 
@@ -40,7 +40,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
           } @else {
             <button type="button" (click)="play()"
                     class="group absolute inset-0 h-full w-full cursor-pointer"
-                    aria-label="Play the walkthrough — CHAINLEASH, 2 minutes">
+                    aria-label="Play the walkthrough — CHAINLEASH, 3:24">
               <img src="walkthrough-poster.webp" alt="" aria-hidden="true" loading="lazy"
                    class="absolute inset-0 h-full w-full object-cover opacity-70 transition-opacity duration-300 group-hover:opacity-95" />
               <span class="pointer-events-none absolute inset-0 bg-gradient-to-t from-graphite/85 via-graphite/25 to-transparent"></span>
@@ -51,7 +51,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
                     <path d="M3 1.6v12.8L14 8z" />
                   </svg>
                   <span class="font-mono font-semibold text-cap tracking-[0.04em] text-ink">Play the walkthrough</span>
-                  <span class="font-mono text-meta text-mute">2 min</span>
+                  <span class="font-mono text-meta text-mute">3:24</span>
                 </span>
               </span>
             </button>

@@ -60,5 +60,5 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: contracts/governed_vault
-      - name: Test (MockVM — the same 39 tests the Odra container runs)
+      - name: Test (MockVM — the same 43 tests the Odra container runs)
         run: cargo test --color never

@@ -2,6 +2,29 @@
 
 Changelog for `governed_vault` — the on-chain leash for CHAINLEASH.
 
+All releases from 0.7.0 are **in-place upgrades** (Odra 2.7) of the same deployed
+package — each new contract version preserves the vault's state and purse, so policy
+entry points were added without redeploying or moving funds.
+
+## [0.8.0] - 2026-06-24
+### Added
+- `set_max_commission(percent)` — owner sets the max-commission threshold the agent
+  scores validators against, on-chain, from the dashboard. Emits `MaxCommissionSet`.
+- Test: owner-only `set_max_commission` (43 total).
+### Notes
+- An Odra `Var` added by an in-place upgrade is written by its setter but is not
+  reliably raw-readable at its declaration index, so the agent reads the owner's value
+  from a confirmed-action store (recorded only after the on-chain tx is verified); the
+  on-chain `set_max_commission` remains the auditable authorization.
+
+## [0.7.0] - 2026-06-16
+### Added
+- `owner_undelegate(validator, amount)` / `owner_redelegate(from, to, amount)` — owner
+  emergency recall of STAKED CSPR (unbounded, allowed while paused; a full-exit escape
+  hatch that can never steal). Powers the dashboard's owner-direct controls (kill-switch,
+  recall staked, withdraw, reject) via the same in-wallet co-sign flow.
+- Tests for the owner recall paths (42 total).
+
 ## [0.6.0] - 2026-06-10
 ### Security
 - `deposit_bond` is no longer permissionless: the bond may only be OPENED by a principal
