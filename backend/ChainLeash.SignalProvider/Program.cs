@@ -66,6 +66,15 @@ async Task<bool> VerifyPayment(string hash)
         var data = dDoc.RootElement.GetProperty("data");
         if (data.TryGetProperty("error_message", out var em) && em.ValueKind == System.Text.Json.JsonValueKind.String) return false; // executed-failed
         if (data.GetProperty("status").GetString() != "processed") return false;
+        // Bind the proof to the expected PAYER via the deploy's CALLER (its signer): CSPR.cloud
+        // leaves a native transfer's from_account_hash null, so the payer identity lives on the
+        // deploy itself, not on the transfer record. Binding here (not on the transfer below) is
+        // what stops anyone reusing a historical transfer to payTo as a free-access token.
+        if (!string.IsNullOrEmpty(expectedPayer))
+        {
+            var caller = data.TryGetProperty("caller_hash", out var ch) ? ch.GetString()?.ToLowerInvariant() : null;
+            if (caller != expectedPayer) return false;
+        }
 
         using var t = await http.GetAsync($"deploys/{hash}/transfers");
         if (!t.IsSuccessStatusCode) return false;
@@ -73,10 +82,8 @@ async Task<bool> VerifyPayment(string hash)
         foreach (var tr in tDoc.RootElement.GetProperty("data").EnumerateArray())
         {
             var to = tr.GetProperty("to_account_hash").GetString()?.ToLowerInvariant();
-            var from = tr.TryGetProperty("from_account_hash", out var fh) ? fh.GetString()?.ToLowerInvariant() : null;
             if (!BigInteger.TryParse(tr.GetProperty("amount").GetString(), out var amt)) continue; // U512-safe
-            var payerOk = string.IsNullOrEmpty(expectedPayer) || from == expectedPayer; // bind to the buyer
-            if (to == payTo && payerOk && amt >= priceMotes) return true;
+            if (to == payTo && amt >= priceMotes) return true; // payer already bound via caller_hash
         }
         return false;
     }
