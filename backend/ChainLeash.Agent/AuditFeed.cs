@@ -24,7 +24,8 @@ public sealed record AuditEvent(
 }
 
 /// A validator as the agent currently sees it (live CSPR.cloud metric + policy verdict).
-public sealed record ValidatorView(string PublicKey, int FeePercent, bool Active, bool Compliant, decimal DelegatedCspr, string Note);
+/// `Name` is the validator's registered account-info branding, or null if it has none.
+public sealed record ValidatorView(string PublicKey, int FeePercent, bool Active, bool Compliant, decimal DelegatedCspr, string Note, string? Name = null);
 
 /// A pending material (over-cap / escalated) proposal awaiting the human owner's co-sign.
 public sealed record ProposalView(uint Id, string Validator, decimal AmountCspr, bool Undelegate, string TxHash, bool Resolved);

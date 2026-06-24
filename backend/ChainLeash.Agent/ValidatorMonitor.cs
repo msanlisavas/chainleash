@@ -24,6 +24,12 @@ public sealed class ValidatorMonitor
     private readonly TimeSpan _ttl;
     private IReadOnlyList<Assessment>? _cache;
     private DateTime _cacheAt;
+    // Validator branding (account-info names) — fetched via raw REST (the SDK query above doesn't
+    // surface it) and cached per era alongside the policy assessment.
+    private readonly HttpClient _http;
+    private readonly string _restBase;
+    private Dictionary<string, string>? _names;
+    private DateTime _namesAt;
 
     public ValidatorMonitor(IConfiguration cfg)
     {
@@ -33,11 +39,15 @@ public sealed class ValidatorMonitor
         _mainnet = string.Equals(cfg["Casper:ChainName"], "casper", StringComparison.OrdinalIgnoreCase);
         // ~one era (validators don't change intra-era); refreshed lazily on the next Assess.
         _ttl = TimeSpan.FromSeconds(cfg.GetValue("Agent:ValidatorCacheSeconds", 1800));
+        _restBase = (cfg["Casper:CsprCloudBaseUrl"] ?? "https://api.testnet.cspr.cloud").TrimEnd('/');
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        if (!string.IsNullOrWhiteSpace(key)) _http.DefaultRequestHeaders.Add("Authorization", key);
     }
 
-    /// One validator scored against policy.
+    /// One validator scored against policy. `Name` is the validator's registered account-info
+    /// branding (null when it hasn't registered one — the UI falls back to the key).
     public readonly record struct Assessment(
-        string PublicKey, int FeePercent, bool IsActive, decimal StakeCspr, bool Compliant, string Note);
+        string PublicKey, int FeePercent, bool IsActive, decimal StakeCspr, bool Compliant, string Note, string? Name = null);
 
     public string[] Allowlist =>
         _cfg.GetSection("Staking:Allowlist").Get<string[]>() ?? Array.Empty<string>();
@@ -77,18 +87,21 @@ public sealed class ValidatorMonitor
                 .Where(v => !string.IsNullOrEmpty(v.PublicKey))
                 .GroupBy(v => v.PublicKey!.ToLowerInvariant())
                 .ToDictionary(g => g.Key, g => g.First());
+            await EnsureNames(era.ToString(), ct); // validator branding (account-info names), cached
         }
         catch when (_cache is not null)
         {
             return _cache; // transient upstream failure — keep serving the last-known set
         }
 
+        var names = _names ?? new Dictionary<string, string>();
         var list = new List<Assessment>();
         foreach (var pk in allow)
         {
+            var name = names.GetValueOrDefault(pk.ToLowerInvariant());
             if (!byKey.TryGetValue(pk.ToLowerInvariant(), out var v))
             {
-                list.Add(new Assessment(pk, -1, false, 0, false, "not in current era set"));
+                list.Add(new Assessment(pk, -1, false, 0, false, "not in current era set", name));
                 continue;
             }
             var fee = v.Fee.HasValue ? (int)Math.Round((double)v.Fee.Value) : int.MaxValue; // null fee → fails policy
@@ -96,7 +109,7 @@ public sealed class ValidatorMonitor
                 System.Globalization.CultureInfo.InvariantCulture, out var motes) ? motes / 1_000_000_000m : 0m;
             var compliant = StakingPolicy.IsCompliant(fee, v.IsActive, max);
             var note = StakingPolicy.ComplianceNote(fee, v.IsActive, max);
-            list.Add(new Assessment(pk, fee, v.IsActive, stake, compliant, note));
+            list.Add(new Assessment(pk, fee, v.IsActive, stake, compliant, note, name));
         }
 
         // Best first: compliant before breaching, then lowest commission, then more stake.
@@ -108,5 +121,21 @@ public sealed class ValidatorMonitor
         _cache = ordered;
         _cacheAt = DateTime.UtcNow;
         return ordered;
+    }
+
+    /// Refresh the validator-name map (account-info branding) for the current era, cached for the
+    /// same window as the assessment. Names are a display nicety — a fetch failure is non-fatal
+    /// (keep the last-known map, or none), it must never block the policy assessment.
+    private async Task EnsureNames(string era, CancellationToken ct)
+    {
+        if (_names is not null && DateTime.UtcNow - _namesAt < _ttl) return;
+        try
+        {
+            using var resp = await _http.GetAsync($"{_restBase}/validators?era_id={era}&page_size=100&includes=account_info", ct);
+            resp.EnsureSuccessStatusCode();
+            _names = ValidatorNames.Parse(await resp.Content.ReadAsStringAsync(ct));
+            _namesAt = DateTime.UtcNow;
+        }
+        catch { /* names optional — keep whatever we had (possibly none) */ }
     }
 }

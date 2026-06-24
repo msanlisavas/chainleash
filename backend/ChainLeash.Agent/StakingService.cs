@@ -3,7 +3,7 @@ namespace ChainLeash.Agent;
 /// One delegated position as the dashboard renders it.
 public sealed record PositionView(
     string PublicKey, int FeePercent, bool Active, bool Compliant,
-    decimal PrincipalCspr, decimal CurrentStakeCspr, decimal RewardCspr, string Status);
+    decimal PrincipalCspr, decimal CurrentStakeCspr, decimal RewardCspr, string Status, string? Name = null);
 
 /// The vault's full staking picture: positions + portfolio totals.
 public sealed record StakingView(
@@ -82,7 +82,7 @@ public sealed class StakingService
                 : principal <= 0m && current > 0m ? "Unbonding"
                 : "Delegated";
             positions.Add(new PositionView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant,
-                principal, current, reward, status));
+                principal, current, reward, status, a.Name));
         }
 
         var staked = positions.Sum(p => p.CurrentStakeCspr);
