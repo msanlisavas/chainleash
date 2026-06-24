@@ -189,12 +189,38 @@
                     <p class="text-mute text-meta">No free balance to withdraw — recall staked CSPR first, then withdraw once it unbonds.</p>
                   }
                 </div>
+
+                <!-- Policy controls (wallet-signed, owner-gated on-chain; agent reads each from chain) -->
+                <div class="pt-3 border-t border-line">
+                  <p class="text-mute text-meta mb-2 uppercase tracking-wide">Policy <span class="normal-case text-mute/70">— signed in your wallet, takes effect next tick</span></p>
+                  <div class="flex flex-col gap-2">
+                    <div class="flex items-center gap-2">
+                      <label class="text-mini text-mute w-[7.5rem] shrink-0">Per-action cap <span class="text-mute/60">({{ fmt(s?.capCspr) }})</span></label>
+                      <input type="number" min="0" inputmode="decimal" [value]="capInput() ?? ''" (input)="capInput.set(numOrNull($event))"
+                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="raise to… CSPR" />
+                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="raiseCap()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Raise cap'">Raise</button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <label class="text-mini text-mute w-[7.5rem] shrink-0">Per-validator cap <span class="text-mute/60">({{ s?.maxPerValidatorCspr ? fmt(s?.maxPerValidatorCspr) : '∞' }})</span></label>
+                      <input type="number" min="0" inputmode="decimal" [value]="maxValInput() ?? ''" (input)="maxValInput.set(numOrNull($event))"
+                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="CSPR (0 = ∞)" />
+                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setMaxVal()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set per-validator cap'">Set</button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <label class="text-mini text-mute w-[7.5rem] shrink-0">Cooldown <span class="text-mute/60">({{ cooldownSeconds() }}s)</span></label>
+                      <input type="number" min="0" inputmode="numeric" [value]="cooldownInput() ?? ''" (input)="cooldownInput.set(numOrNull($event))"
+                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="seconds (0 = off)" />
+                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="setCooldown()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === 'Set cooldown'">Set</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             } @else {
               <p class="text-mute text-note">
                 These are <b class="text-ink">owner-only</b> powers, enforced on-chain — kill-switch, recall staked
-                CSPR, withdraw to wallet. Each needs the owner's wallet signature, so connect the
-                <b class="text-ink">owner account</b> to operate them. Anyone can verify every move on the explorer.
+                CSPR, withdraw to wallet, and tune the leash policy (per-action cap, per-validator cap, cooldown).
+                Each needs the owner's wallet signature, so connect the <b class="text-ink">owner account</b> to
+                operate them. Anyone can verify every move on the explorer.
               </p>
             }
 
@@ -223,7 +249,13 @@
               <div class="flex flex-wrap gap-x-3.5 gap-y-1 mt-2 text-mute text-mini font-mono">
                 <span>commission <b class="text-ink">{{ v.feePercent }}%</b></span>
                 <span>{{ v.active ? 'active' : 'inactive' }}</span>
-                @if (v.delegatedCspr > 0) { <span>committed <b class="text-ink">{{ fmt(v.delegatedCspr) }}</b> CSPR</span> }
+                @if (v.delegatedCspr > 0) {
+                  @if (isSettling(v)) {
+                    <span class="text-amber">settling <b>{{ fmt(v.delegatedCspr) }}</b> CSPR <span class="text-mute/70">(~7 eras)</span></span>
+                  } @else {
+                    <span>committed <b class="text-ink">{{ fmt(v.delegatedCspr) }}</b> CSPR</span>
+                  }
+                }
               </div>
             </div>
           } @empty {

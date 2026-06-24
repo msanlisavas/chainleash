@@ -29,6 +29,7 @@ interface FeedState {
   // full leash state, all read from chain
   paused: boolean; bondCspr: number; freeBalanceCspr: number; totalBalanceCspr: number;
   maxPerValidatorCspr: number; violations: number; stale: boolean; lastCheckedIso?: string;
+  actionIntervalMs?: number;
   validators: ValidatorView[]; proposals: ProposalView[];
 }
 
@@ -65,6 +66,10 @@ export class AppComponent implements OnInit, OnDestroy {
   ownerBusy = signal<string | null>(null);   // label of the in-flight owner action
   ownerError = signal<string | null>(null);
   ownerOk = signal<string | null>(null);
+  // Owner policy-panel inputs (per-action cap raise, per-validator cap, cooldown seconds).
+  capInput = signal<number | null>(null);
+  maxValInput = signal<number | null>(null);
+  cooldownInput = signal<number | null>(null);
 
   private conn?: signalR.HubConnection;
   private destroyed = false;
@@ -252,9 +257,21 @@ export class AppComponent implements OnInit, OnDestroy {
   /** Stake actually delegated on-chain for a validator right now (from the staking view), not just
    *  what the agent DIRECTED. These diverge while a redelegation is settling (~7 eras): committed
    *  shows the move, but there's no undelegatable delegation yet — recalling it reverts on-chain. */
-  recallableCspr(v: ValidatorView): number {
+  /** Actual on-chain stake for v from the staking view, or null if that view hasn't loaded yet. */
+  private actualStake(v: ValidatorView): number | null {
     const pos = (this.staking()?.positions ?? []).find(p => p.publicKey.toLowerCase() === v.publicKey.toLowerCase());
-    return pos ? pos.currentStakeCspr : v.delegatedCspr; // fall back to committed until the staking view loads
+    return pos ? pos.currentStakeCspr : null;
+  }
+
+  recallableCspr(v: ValidatorView): number {
+    const a = this.actualStake(v);
+    return a !== null ? a : v.delegatedCspr; // fall back to committed until the staking view loads
+  }
+
+  /** True when the agent has DIRECTED stake here but there's no active on-chain delegation yet —
+   *  a redelegation still settling through Casper's ~7-era unbonding queue (committed>0, current=0). */
+  isSettling(v: ValidatorView): boolean {
+    return v.delegatedCspr > 0 && this.actualStake(v) === 0;
   }
 
   /** Validators the owner can actually recall NOW (a real on-chain delegation exists). */
@@ -299,6 +316,28 @@ export class AppComponent implements OnInit, OnDestroy {
     this.ownerAction('withdraw', { amountCspr: this.state()?.freeBalanceCspr ?? 0 }, 'Withdraw to wallet');
   }
   rejectProposal(p: ProposalView): void { this.ownerAction('reject', { id: p.id }, `Reject #${p.id}`); }
+
+  // --- Owner POLICY controls (wallet-signed, owner-gated on-chain). The agent reads each from
+  //     chain, so the change takes effect on its next tick. ---
+  raiseCap(): void {
+    const c = this.capInput();
+    if (c === null || c <= (this.state()?.capCspr ?? 0)) { this.ownerError.set('Enter a cap HIGHER than the current one (the agent can only tighten; the owner raises).'); return; }
+    this.ownerAction('raisecap', { amountCspr: c }, 'Raise cap');
+  }
+  setMaxVal(): void {
+    const m = this.maxValInput();
+    if (m === null || m < 0) { this.ownerError.set('Enter a per-validator cap in CSPR (0 = unlimited).'); return; }
+    this.ownerAction('setmaxval', { amountCspr: m }, 'Set per-validator cap');
+  }
+  setCooldown(): void {
+    const s = this.cooldownInput();
+    if (s === null || s < 0) { this.ownerError.set('Enter a cooldown in seconds (0 = off).'); return; }
+    this.ownerAction('setcooldown', { intervalSeconds: s }, 'Set cooldown');
+  }
+  /** Current on-chain cooldown in seconds (for the policy panel's placeholder/label). */
+  cooldownSeconds(): number { return Math.round((this.state()?.actionIntervalMs ?? 0) / 1000); }
+  /** Read a number input's value, or null when empty/invalid (so 0 stays 0, blank stays null). */
+  numOrNull(e: Event): number | null { const v = (e.target as HTMLInputElement).valueAsNumber; return isNaN(v) ? null : v; }
 
   /** Why the in-wallet co-sign button is unusable right now (null = usable). */
   coSignBlocked(): string | null {
