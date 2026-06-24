@@ -210,6 +210,15 @@ public sealed class ChainReader
     /// Free, deployable CSPR = liquid balance minus the reserved bond.
     public async Task<decimal> FreeBalanceCspr() => await TotalBalanceCspr() - await BondCspr();
 
+    /// The vault's contract main-purse uref — the delegator identity for its contract-custodial
+    /// stakes. The staking page matches this against CSPR.cloud delegation rows (the vault is a
+    /// uref delegator, which is why explorers keyed by a public key don't show its positions).
+    public async Task<string> VaultPurseUref()
+    {
+        await EnsureResolved();
+        return _mainPurse!;
+    }
+
     /// Liquid CSPR in an account's main purse (e.g. the agent's gas wallet) — for ops/health.
     public async Task<decimal> AccountBalanceCspr(string publicKeyHex)
     {

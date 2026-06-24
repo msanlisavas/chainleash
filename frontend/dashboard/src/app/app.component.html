@@ -77,6 +77,8 @@
         [accent]="(s?.violations ?? 0) > 0 ? 'red' : 'steel'" />
     </div>
 
+    <app-positions [data]="staking()" [explorerBase]="explorerBase()" />
+
     <!-- Feed + side -->
     <div class="grid lg:grid-cols-[1.6fr_1fr] gap-4 items-start mt-5">
       <section class="panel p-5">
@@ -181,7 +183,11 @@
                 </div>
               </div>
             } @else {
-              <p class="text-mute text-note">Connect the <b class="text-ink">owner account</b> to stop the agent, recall staked CSPR, or withdraw to your wallet.</p>
+              <p class="text-mute text-note">
+                These are <b class="text-ink">owner-only</b> powers, enforced on-chain — kill-switch, recall staked
+                CSPR, withdraw to wallet. Each needs the owner's wallet signature, so connect the
+                <b class="text-ink">owner account</b> to operate them. Anyone can verify every move on the explorer.
+              </p>
             }
 
             @if (ownerOk()) { <p class="text-green text-mini mt-3 font-semibold" role="status">✓ {{ ownerOk() }}</p> }
@@ -218,7 +224,7 @@
                  [class.attention]="pending.length > 0">
           <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
             Material proposals
-            <small class="text-mute font-normal text-meta">co-signed in the owner's own wallet</small>
+            <small class="text-mute font-normal text-meta">a live over-cap move the agent escalated — co-signed in the owner's own wallet</small>
           </h3>
 
           @for (p of pending; track p.id) {
