@@ -13,6 +13,7 @@ builder.Services.AddSingleton<CasperVault>();
 builder.Services.AddSingleton<X402Client>();
 builder.Services.AddSingleton<ValidatorMonitor>();
 builder.Services.AddSingleton<ChainReader>();
+builder.Services.AddSingleton<StakingService>();
 builder.Services.AddSingleton<AuditFeed>();
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddSignalR();
@@ -127,6 +128,12 @@ app.MapGet("/health", async (ChainReader chain, CasperVault vault, X402Client x4
 
 // Snapshot of the live leash + agent state plus recent audit history (for first paint).
 app.MapGet("/api/state", (AuditFeed feed) => Results.Json(new { state = feed.State, events = feed.Recent() }))
+    .RequireRateLimiting("api");
+
+// Where the vault delegated + how much it earned. The vault is a contract (uref) delegator, so
+// cspr.live can't show this; CSPR.cloud's delegation index can. Read-only, cached ~per era.
+app.MapGet("/api/staking", async (StakingService staking, HttpContext http) =>
+    Results.Json(await staking.GetAsync(http.RequestAborted)))
     .RequireRateLimiting("api");
 
 // Public config the dashboard needs to drive the in-browser wallet co-sign (no secrets).
