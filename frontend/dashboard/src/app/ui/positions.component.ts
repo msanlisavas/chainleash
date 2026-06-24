@@ -2,7 +2,7 @@ import { Component, input } from '@angular/core';
 
 export interface Position {
   publicKey: string; feePercent: number; active: boolean; compliant: boolean;
-  principalCspr: number; currentStakeCspr: number; rewardCspr: number; status: string;
+  principalCspr: number; currentStakeCspr: number; rewardCspr: number; status: string; name?: string;
 }
 export interface Staking {
   positions: Position[];
@@ -49,7 +49,14 @@ export interface Staking {
                   <tr class="border-b border-line last:border-0">
                     <td class="py-2.5 pr-3">
                       <a [href]="explorerBase() + '/validator/' + p.publicKey" target="_blank" rel="noopener"
-                         class="text-steel hover:text-ink hover:underline">{{ short(p.publicKey) }}</a>
+                         class="hover:underline" [title]="p.publicKey">
+                        @if (p.name) {
+                          <span class="font-sans text-ink">{{ p.name }}</span>
+                          <span class="text-mute">{{ short(p.publicKey) }}</span>
+                        } @else {
+                          <span class="text-steel hover:text-ink">{{ short(p.publicKey) }}</span>
+                        }
+                      </a>
                     </td>
                     <td class="py-2.5 px-3" [class]="p.compliant ? 'text-ink' : 'text-redtext'">{{ p.feePercent }}%</td>
                     <td class="py-2.5 px-3 text-mute">{{ p.status }}</td>
@@ -94,7 +101,10 @@ export class PositionsComponent {
   data = input<Staking | null>(null);
   explorerBase = input<string>('https://testnet.cspr.live');
 
-  short(s?: string): string { return s ? s.slice(0, 10) + '…' : ''; }
+  short(s?: string): string {
+    if (!s) return '';
+    return s.length <= 12 ? s : s.slice(0, 5) + '...' + s.slice(-5);
+  }
   fmt(n?: number | null): string {
     return n === undefined || n === null ? '—'
       : new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);

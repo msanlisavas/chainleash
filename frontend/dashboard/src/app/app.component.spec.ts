@@ -16,8 +16,9 @@ describe('AppComponent', () => {
     c = TestBed.createComponent(AppComponent).componentInstance;
   });
 
-  it('short() truncates a hash to 10 chars + ellipsis, and is null-safe', () => {
-    expect(c.short('0106618e1493f73ee0')).toBe('0106618e14…');
+  it('short() mid-truncates a key to first-5...last-5, and is null-safe', () => {
+    expect(c.short('0106618e1493f73ee0')).toBe('01066...73ee0');
+    expect(c.short('abcdef')).toBe('abcdef'); // short strings unchanged
     expect(c.short('')).toBe('');
     expect(c.short(undefined)).toBe('');
   });

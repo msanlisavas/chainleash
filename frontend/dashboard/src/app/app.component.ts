@@ -18,7 +18,7 @@ interface AuditEvent {
   iso?: string; // full ISO-8601 UTC timestamp (older persisted events may lack it)
 }
 interface ValidatorView {
-  publicKey: string; feePercent: number; active: boolean; compliant: boolean; delegatedCspr: number; note: string;
+  publicKey: string; feePercent: number; active: boolean; compliant: boolean; delegatedCspr: number; note: string; name?: string;
 }
 interface ProposalView {
   id: number; validator: string; amountCspr: number; undelegate: boolean; txHash: string; resolved: boolean;
@@ -331,6 +331,10 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
-  short(s?: string): string { return s ? s.slice(0, 10) + '…' : ''; }
+  /** Mid-truncate a key/hash to first-5…last-5 for readability, e.g. 012d5...4f1f2. */
+  short(s?: string): string {
+    if (!s) return '';
+    return s.length <= 12 ? s : s.slice(0, 5) + '...' + s.slice(-5);
+  }
   kindClass(k: string): string { return 'k-' + k.toLowerCase(); }
 }

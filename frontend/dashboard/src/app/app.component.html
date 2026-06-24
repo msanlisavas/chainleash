@@ -205,8 +205,11 @@
                  [class]="v.compliant ? 'border-line' : 'border-red/45 bg-red/5'">
               <div class="flex items-center justify-between gap-2">
                 <a [href]="explorerBase() + '/validator/' + v.publicKey" target="_blank" rel="noopener"
-                   class="font-mono text-cap text-steel hover:text-ink hover:underline py-0.5"
-                   title="View validator on the block explorer">{{ short(v.publicKey) }}</a>
+                   class="hover:underline py-0.5 inline-flex items-baseline gap-1.5 min-w-0"
+                   [title]="v.publicKey">
+                  @if (v.name) { <span class="font-sans text-cap text-ink truncate">{{ v.name }}</span> }
+                  <span class="font-mono text-mini text-steel hover:text-ink shrink-0">{{ short(v.publicKey) }}</span>
+                </a>
                 <span class="pill" [class]="v.compliant ? 'pill-ok' : 'pill-bad'">{{ v.compliant ? 'in policy' : 'off policy' }}</span>
               </div>
               <div class="flex flex-wrap gap-x-3.5 gap-y-1 mt-2 text-mute text-mini font-mono">

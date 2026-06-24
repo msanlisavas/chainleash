@@ -11,8 +11,8 @@ describe('PositionsComponent', () => {
     c = TestBed.createComponent(PositionsComponent).componentInstance;
   });
 
-  it('short() truncates a key to 10 chars + ellipsis, null-safe', () => {
-    expect(c.short('0147ce053a742c')).toBe('0147ce053a…');
+  it('short() mid-truncates a key to first-5...last-5, null-safe', () => {
+    expect(c.short('0147ce053a742c')).toBe('0147c...a742c');
     expect(c.short(undefined)).toBe('');
   });
 
