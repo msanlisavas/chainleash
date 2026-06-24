@@ -11,6 +11,7 @@ import { StatCardComponent } from './ui/stat-card.component';
 import { DeployComponent } from './ui/deploy.component';
 import { SiteFooterComponent } from './ui/site-footer.component';
 import { PositionsComponent, Staking } from './ui/positions.component';
+import { InfoComponent } from './ui/info.component';
 
 interface AuditEvent {
   time: string; tick: number; kind: string; message: string;
@@ -20,6 +21,7 @@ interface AuditEvent {
 interface ValidatorView {
   publicKey: string; feePercent: number; active: boolean; compliant: boolean; delegatedCspr: number; note: string; name?: string; allowed?: boolean;
 }
+interface DirectoryValidator { publicKey: string; name?: string | null; feePercent: number; active: boolean; }
 interface ProposalView {
   id: number; validator: string; amountCspr: number; undelegate: boolean; txHash: string; resolved: boolean;
 }
@@ -37,7 +39,7 @@ interface FeedState {
     selector: 'app-root',
     imports: [
         NavBarComponent, HeroComponent, HowItWorksComponent,
-        GuaranteeComponent, StatCardComponent, PositionsComponent, DeployComponent, SiteFooterComponent,
+        GuaranteeComponent, StatCardComponent, PositionsComponent, InfoComponent, DeployComponent, SiteFooterComponent,
     ],
     templateUrl: './app.component.html',
     styleUrl: './app.component.scss'
@@ -70,7 +72,8 @@ export class AppComponent implements OnInit, OnDestroy {
   capInput = signal<number | null>(null);
   maxValInput = signal<number | null>(null);
   cooldownInput = signal<number | null>(null);
-  addValidatorInput = signal<string>('');
+  validatorSearch = signal<string>('');
+  availableValidators = signal<DirectoryValidator[]>([]);
 
   private conn?: signalR.HubConnection;
   private destroyed = false;
@@ -83,6 +86,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.loadState();
     this.loadConfig();
     this.loadStaking();
+    this.loadValidators();
 
     this.conn = new signalR.HubConnectionBuilder()
       .withUrl(`${this.api}/hub/audit`)
@@ -155,6 +159,14 @@ export class AppComponent implements OnInit, OnDestroy {
     this.http.get<Staking>(`${this.api}/api/staking`).subscribe({
       next: s => this.staking.set(s),
       error: () => { /* staking view optional; degrades to a loading line */ }
+    });
+  }
+
+  /** Fetch the validator directory for the owner's "add validator" search. */
+  private loadValidators(): void {
+    this.http.get<DirectoryValidator[]>(`${this.api}/api/validators`).subscribe({
+      next: vs => this.availableValidators.set(vs ?? []),
+      error: () => { /* directory optional; the add-search stays empty */ }
     });
   }
 
@@ -343,10 +355,21 @@ export class AppComponent implements OnInit, OnDestroy {
   }
   /** A Casper validator public key: ed25519 (01 + 64 hex) or secp256k1 (02 + 66 hex). */
   private isValidPubKey(k: string): boolean { return /^(01[0-9a-f]{64}|02[0-9a-f]{66})$/.test(k); }
-  addValidator(): void {
-    const k = (this.addValidatorInput() || '').trim().toLowerCase();
-    if (!this.isValidPubKey(k)) { this.ownerError.set('Enter a valid Casper validator public key — 01… (ed25519) or 02… (secp256k1).'); return; }
+  /** Validators NOT already on the agent's watch-list, filtered by the search box (name or key). */
+  filteredValidators(): DirectoryValidator[] {
+    const q = this.validatorSearch().trim().toLowerCase();
+    const watched = new Set((this.state()?.validators ?? []).map(v => v.publicKey.toLowerCase()));
+    return this.availableValidators()
+      .filter(dv => !watched.has(dv.publicKey.toLowerCase()))
+      .filter(dv => !q || dv.publicKey.toLowerCase().includes(q) || (dv.name ?? '').toLowerCase().includes(q))
+      .slice(0, 12);
+  }
+  /** Add a validator the owner picked from the search list (signs set_validator(true)). */
+  addValidatorByKey(key: string): void {
+    const k = (key || '').trim().toLowerCase();
+    if (!this.isValidPubKey(k)) { this.ownerError.set('That is not a valid Casper validator public key.'); return; }
     if ((this.state()?.validators ?? []).some(v => v.publicKey.toLowerCase() === k)) { this.ownerError.set("That validator is already on the agent's watch-list."); return; }
+    this.validatorSearch.set('');
     this.ownerAction('setvalidator', { validator: k, allowed: true }, `Add ${this.short(k)}`);
   }
   /** Current on-chain cooldown in seconds (for the policy panel's placeholder/label). */

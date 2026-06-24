@@ -198,8 +198,7 @@
                     <div>
                       <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
                         <span>Per-action cap</span>
-                        <span class="cursor-help text-steel/80 shrink-0" tabindex="0" role="img" aria-label="help"
-                              title="The most CSPR the agent can move (delegate / undelegate / redelegate) in a SINGLE transaction. Any larger move must be escalated to a human co-signed 'material' proposal. The agent can only TIGHTEN (lower) this; only you (the owner) can raise it — this bounds the blast radius of any one agent action.">ⓘ</span>
+                        <app-info text="The most CSPR the agent can move (delegate / undelegate / redelegate) in a single transaction. Any larger move must be escalated to a human co-signed 'material' proposal. The agent can only tighten (lower) this; only you (the owner) can raise it — bounding the blast radius of any one agent action." />
                         <span class="ml-auto text-mute/60">now {{ fmt(s?.capCspr) }} CSPR</span>
                       </div>
                       <div class="flex items-center gap-2">
@@ -212,8 +211,7 @@
                     <div>
                       <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
                         <span>Per-validator cap</span>
-                        <span class="cursor-help text-steel/80 shrink-0" tabindex="0" role="img" aria-label="help"
-                              title="The most total CSPR the agent may concentrate on any ONE validator (0 = unlimited). This enforces decentralization — the agent must spread stake across validators instead of piling it onto one. A delegation that would push a validator above this is rejected on-chain.">ⓘ</span>
+                        <app-info text="The most total CSPR the agent may concentrate on any one validator (0 = unlimited). This enforces decentralization — the agent must spread stake across validators instead of piling it onto one. A delegation that would push a validator above this is rejected on-chain." />
                         <span class="ml-auto text-mute/60">now {{ s?.maxPerValidatorCspr ? fmt(s?.maxPerValidatorCspr) + ' CSPR' : 'unlimited' }}</span>
                       </div>
                       <div class="flex items-center gap-2">
@@ -226,8 +224,7 @@
                     <div>
                       <div class="flex items-center gap-1.5 mb-1 text-mini text-mute">
                         <span>Cooldown</span>
-                        <span class="cursor-help text-steel/80 shrink-0" tabindex="0" role="img" aria-label="help"
-                              title="The minimum time the agent must wait between on-chain moves (anti-thrash). At 30s it can't make two delegations/redelegations within 30 seconds — so a buggy or compromised agent can't rapidly churn the stake, which would burn gas and trigger Casper's ~7-era unbonding. 0 = no cooldown.">ⓘ</span>
+                        <app-info text="The minimum time the agent must wait between on-chain moves (anti-thrash). At 30s it can't make two delegations/redelegations within 30 seconds — so a buggy or compromised agent can't rapidly churn the stake, which would burn gas and trigger Casper's ~7-era unbonding. 0 = no cooldown." />
                         <span class="ml-auto text-mute/60">now {{ cooldownSeconds() }}s</span>
                       </div>
                       <div class="flex items-center gap-2">
@@ -243,8 +240,7 @@
                 <div class="pt-3 border-t border-line">
                   <p class="text-mute text-meta mb-2 uppercase tracking-wide flex items-center gap-1.5">
                     <span>Allowlist</span>
-                    <span class="cursor-help text-steel/80 shrink-0 normal-case" tabindex="0" role="img" aria-label="help"
-                          title="The validators the agent is permitted to stake to. The contract REJECTS any delegation to a validator not on this list. Disallowing one that holds stake makes the agent treat it as off-policy and redelegate that stake to an allowed validator. Add a new validator by its public key below.">ⓘ</span>
+                    <app-info text="The validators the agent is permitted to stake to. The contract rejects any delegation to a validator not on this list. Disallowing one that holds stake makes the agent treat it as off-policy and redelegate that stake to an allowed validator. Add a new validator below by searching for it." />
                     <span class="normal-case text-mute/70">— which validators the agent may use</span>
                   </p>
                   <div class="flex flex-col gap-1.5">
@@ -264,11 +260,28 @@
                     } @empty {
                       <p class="text-mute text-meta">No validators loaded.</p>
                     }
-                    <!-- Add a brand-new validator: signs set_validator(true) + adds it to the agent's watch-list -->
-                    <div class="flex items-center gap-2 pt-1.5 mt-1 border-t border-line/60">
-                      <input type="text" spellcheck="false" autocomplete="off" [value]="addValidatorInput()" (input)="addValidatorInput.set($any($event.target).value)"
-                             class="flex-1 min-w-0 bg-graphite/40 border border-line rounded px-2 py-1 text-mini font-mono text-ink placeholder:text-mute/50" placeholder="add validator public key (01…)" />
-                      <button class="btn btn-ghost py-1 px-2.5 text-mini shrink-0" (click)="addValidator()" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === ('Add ' + short(addValidatorInput().trim().toLowerCase()))">Add</button>
+                    <!-- Add a validator: search the directory by name/key, click to add (signs set_validator(true)) -->
+                    <div class="pt-1.5 mt-1 border-t border-line/60">
+                      <input type="text" spellcheck="false" autocomplete="off" [value]="validatorSearch()" (input)="validatorSearch.set($any($event.target).value)"
+                             class="w-full bg-graphite/40 border border-line rounded px-2 py-1 text-mini text-ink placeholder:text-mute/50" placeholder="add a validator — search by name or key…" />
+                      @if (validatorSearch().trim().length >= 1) {
+                        <div class="mt-1 max-h-44 overflow-y-auto rounded border border-line divide-y divide-line/60">
+                          @for (dv of filteredValidators(); track dv.publicKey) {
+                            <button class="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-mini text-left hover:bg-graphite/50"
+                                    (click)="addValidatorByKey(dv.publicKey)" [disabled]="walletBusy()">
+                              <span class="inline-flex items-baseline gap-1.5 min-w-0">
+                                @if (dv.name) { <span class="font-sans text-ink truncate">{{ dv.name }}</span> }
+                                <span class="font-mono text-steel shrink-0">{{ short(dv.publicKey) }}</span>
+                              </span>
+                              <span class="text-mute shrink-0 font-mono">{{ dv.feePercent }}%@if (!dv.active) {<span class="text-redtext"> · inactive</span>}</span>
+                            </button>
+                          } @empty {
+                            <p class="text-mute text-meta px-2 py-2">No match (validators already watched are hidden).</p>
+                          }
+                        </div>
+                      } @else if (availableValidators().length === 0) {
+                        <p class="text-mute text-meta mt-1">Validator directory loading…</p>
+                      }
                     </div>
                   </div>
                 </div>
