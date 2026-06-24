@@ -28,7 +28,7 @@ interface FeedState {
   x402SpentCspr: number; actions: number; buys: number;
   // full leash state, all read from chain
   paused: boolean; bondCspr: number; freeBalanceCspr: number; totalBalanceCspr: number;
-  maxPerValidatorCspr: number; violations: number; stale: boolean;
+  maxPerValidatorCspr: number; violations: number; stale: boolean; lastCheckedIso?: string;
   validators: ValidatorView[]; proposals: ProposalView[];
 }
 
@@ -49,6 +49,9 @@ export class AppComponent implements OnInit, OnDestroy {
   state = signal<FeedState | null>(null);
   config = signal<AppConfig | null>(null);
   staking = signal<Staking | null>(null);
+  /** A 1s ticking clock so the "last checked Ns ago" heartbeat counts up live between agent ticks. */
+  private clock = signal(Date.now());
+  private clockTimer?: ReturnType<typeof setInterval>;
   /** Honest connection status: the dashboard NEVER silently gives up reconnecting. */
   link = signal<'connecting' | 'live' | 'reconnecting' | 'offline'>('connecting');
   loadError = signal(false);
@@ -88,11 +91,13 @@ export class AppComponent implements OnInit, OnDestroy {
     // endless retry loop so an outage never permanently kills the dashboard.
     this.conn.onclose(() => this.scheduleRestart());
     this.startSignalR(true);
+    this.clockTimer = setInterval(() => this.clock.set(Date.now()), 1000);
   }
 
   ngOnDestroy(): void {
     this.destroyed = true;
     clearTimeout(this.retryTimer);
+    clearInterval(this.clockTimer);
     this.conn?.stop().catch(() => { /* already down */ });
   }
 
@@ -337,4 +342,18 @@ export class AppComponent implements OnInit, OnDestroy {
     return s.length <= 12 ? s : s.slice(0, 5) + '...' + s.slice(-5);
   }
   kindClass(k: string): string { return 'k-' + k.toLowerCase(); }
+
+  /** Seconds since the agent last evaluated the vault (live "watching" heartbeat). */
+  secondsAgo(): number | null {
+    const iso = this.state()?.lastCheckedIso;
+    if (!iso) return null;
+    const ms = this.clock() - new Date(iso).getTime();
+    return ms >= 0 ? Math.floor(ms / 1000) : 0;
+  }
+  /** Human "checked Ns ago" / "Nm Ns ago" for the heartbeat. */
+  checkedAgo(): string {
+    const s = this.secondsAgo();
+    if (s === null) return '—';
+    return s < 60 ? s + 's ago' : Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
+  }
 }

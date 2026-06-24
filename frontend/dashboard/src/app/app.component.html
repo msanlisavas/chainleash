@@ -85,6 +85,14 @@
         <h3 class="font-mono font-semibold text-body mb-4 flex flex-wrap items-baseline gap-x-2">
           Live audit feed
           <small class="text-mute font-normal text-meta">every agent decision, on-chain · times in your local timezone</small>
+          @if (s?.lastCheckedIso) {
+            <span class="ml-auto inline-flex items-center gap-1.5 text-meta font-mono shrink-0"
+                  [class]="link() === 'live' ? 'text-green' : 'text-mute'"
+                  title="The agent re-evaluates the vault every tick; this counts up between ticks. Idle ticks aren't logged (the decision hasn't changed) — only real moves and changes are.">
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true"></span>
+              watching · checked {{ checkedAgo() }}
+            </span>
+          }
         </h3>
         <ul role="log" aria-live="polite" aria-relevant="additions" aria-label="Agent decision feed"
             class="list-none m-0 p-0 lg:max-h-[68vh] lg:overflow-y-auto">

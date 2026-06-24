@@ -49,10 +49,10 @@ export interface Staking {
                   <tr class="border-b border-line last:border-0">
                     <td class="py-2.5 pr-3">
                       <a [href]="explorerBase() + '/validator/' + p.publicKey" target="_blank" rel="noopener"
-                         class="hover:underline" [title]="p.publicKey">
+                         class="hover:underline inline-flex items-baseline gap-1.5 min-w-0" [title]="p.publicKey">
                         @if (p.name) {
-                          <span class="font-sans text-ink">{{ p.name }}</span>
-                          <span class="text-mute">{{ short(p.publicKey) }}</span>
+                          <span class="font-sans text-ink truncate">{{ p.name }}</span>
+                          <span class="text-mute shrink-0">{{ short(p.publicKey) }}</span>
                         } @else {
                           <span class="text-steel hover:text-ink">{{ short(p.publicKey) }}</span>
                         }
