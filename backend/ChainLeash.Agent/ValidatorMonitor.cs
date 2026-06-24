@@ -19,6 +19,7 @@ namespace ChainLeash.Agent;
 public sealed class ValidatorMonitor
 {
     private readonly IConfiguration _cfg;
+    private readonly ChainReader _chain;
     private readonly CasperCloudRestClient _client;
     private readonly bool _mainnet;
     private readonly TimeSpan _ttl;
@@ -31,9 +32,10 @@ public sealed class ValidatorMonitor
     private Dictionary<string, string>? _names;
     private DateTime _namesAt;
 
-    public ValidatorMonitor(IConfiguration cfg)
+    public ValidatorMonitor(IConfiguration cfg, ChainReader chain)
     {
         _cfg = cfg;
+        _chain = chain;
         var key = cfg["Casper:CsprCloudAccessKey"] ?? "";
         _client = new CasperCloudRestClient(new CasperCloudClientConfig(key));
         _mainnet = string.Equals(cfg["Casper:ChainName"], "casper", StringComparison.OrdinalIgnoreCase);
@@ -45,19 +47,45 @@ public sealed class ValidatorMonitor
     }
 
     /// One validator scored against policy. `Name` is the validator's registered account-info
-    /// branding (null when it hasn't registered one — the UI falls back to the key).
+    /// branding (null when it hasn't registered one). `Allowed` is the on-chain allowlist status
+    /// (owner-controlled) — a removed validator is non-compliant regardless of its metrics.
     public readonly record struct Assessment(
-        string PublicKey, int FeePercent, bool IsActive, decimal StakeCspr, bool Compliant, string Note, string? Name = null);
+        string PublicKey, int FeePercent, bool IsActive, decimal StakeCspr, bool Compliant, string Note, string? Name = null, bool Allowed = true);
 
     public string[] Allowlist =>
         _cfg.GetSection("Staking:Allowlist").Get<string[]>() ?? Array.Empty<string>();
 
     public int MaxCommissionPercent => _cfg.GetValue("Staking:MaxCommissionPercent", 6);
 
-    /// Fetch + score every allowlisted validator (best — lowest compliant fee — first).
-    /// Served from cache within the TTL; on a transient CSPR.cloud failure the last-known
-    /// set is returned rather than forcing the agent to HOLD on stale-but-fine data.
+    /// Score every config-allowlisted validator (best — lowest compliant fee — first), then apply
+    /// the LIVE on-chain allowlist. Metrics (commission/active/stake/name) are cached per era; the
+    /// on-chain allowlist is read FRESH each call so an owner allow/disallow takes effect next tick.
     public async Task<IReadOnlyList<Assessment>> Assess(CancellationToken ct = default)
+    {
+        var metrics = await Metrics(ct);
+        if (metrics.Count == 0) return metrics;
+        var adjusted = new List<Assessment>(metrics.Count);
+        foreach (var m in metrics)
+        {
+            // IsValidatorAllowed is fail-safe (true on any read error/unset) — a hiccup can never
+            // make the agent treat its own validators as off-policy and churn their stake.
+            var allowed = await _chain.IsValidatorAllowed(m.PublicKey);
+            adjusted.Add(allowed
+                ? m with { Allowed = true }
+                : m with { Allowed = false, Compliant = false, Note = "removed from the allowlist by the owner" });
+        }
+        // Re-order with the allowlist applied: compliant first, then lowest fee, then more stake.
+        return adjusted
+            .OrderByDescending(a => a.Compliant)
+            .ThenBy(a => a.FeePercent < 0 ? int.MaxValue : a.FeePercent)
+            .ThenByDescending(a => a.StakeCspr)
+            .ToList();
+    }
+
+    /// Live CSPR.cloud metrics + commission/active verdict per validator (the on-chain allowlist is
+    /// layered on in Assess). Served from cache within the TTL; a transient CSPR.cloud failure
+    /// returns the last-known set rather than forcing the agent to HOLD on stale-but-fine data.
+    private async Task<IReadOnlyList<Assessment>> Metrics(CancellationToken ct)
     {
         if (_cache is not null && DateTime.UtcNow - _cacheAt < _ttl) return _cache;
 

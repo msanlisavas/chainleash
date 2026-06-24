@@ -261,6 +261,7 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
             "raisecap"   => vault.PrepareRaiseCap(OwnerActions.ToMotes(body!.AmountCspr)),
             "setmaxval"  => vault.PrepareSetMaxPerValidator(OwnerActions.ToMotesAllowZero(body!.AmountCspr)),
             "setcooldown"=> vault.PrepareSetActionInterval(OwnerActions.ToMs(body!.IntervalSeconds)),
+            "setvalidator" => vault.PrepareSetValidator(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), body.Allowed ?? false),
             _            => throw new ArgumentException("unknown action"),
         };
         return Results.Content("{\"transactionJson\":" + json + ",\"ownerPublicKey\":\"" + vault.OwnerKey.ToAccountHex() + "\"}", "application/json");
@@ -325,8 +326,8 @@ record ConfirmReq(string TxHash);
 
 // Bodies for the owner-direct controls. `Action` selects the owner-gated entry point; the rest
 // are the action's params (CSPR amount, validator(s), proposal id) — only those it needs are set.
-record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds);
-record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds);
+record OwnerPrepareReq(string Action, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds, bool? Allowed);
+record OwnerConfirmReq(string Action, string TxHash, decimal? AmountCspr, string? Validator, string? NewValidator, int? Id, int? IntervalSeconds, bool? Allowed);
 
 /// Server-side whitelist + effects for the owner-direct controls. Keeping the action→entry-point
 /// map here (not client-supplied) means /confirm always verifies the entry point the action
@@ -343,6 +344,7 @@ static class OwnerActions
         "raisecap"           => "raise_cap",
         "setmaxval"          => "set_max_per_validator",
         "setcooldown"        => "set_action_interval",
+        "setvalidator"       => "set_validator",
         _                    => null,
     };
 
@@ -414,6 +416,12 @@ static class OwnerActions
                 var secs = body.IntervalSeconds ?? 0;
                 s.ActionIntervalMs = (ulong)(secs < 0 ? 0 : secs) * 1000;
                 return secs > 0 ? $"Owner set the action cooldown to {secs}s." : "Owner disabled the action cooldown.";
+            case "setvalidator":
+                var allow = body.Allowed ?? false;
+                if (!string.IsNullOrEmpty(body.Validator))
+                    s.Validators = s.Validators.Select(v => string.Equals(v.PublicKey, body.Validator, StringComparison.OrdinalIgnoreCase)
+                        ? v with { Allowed = allow } : v).ToList();
+                return $"Owner {(allow ? "allowed" : "removed")} validator {Short(body.Validator)} {(allow ? "on" : "from")} the allowlist.";
             default:
                 return "Owner action confirmed on-chain.";
         }

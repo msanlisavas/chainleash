@@ -346,7 +346,7 @@ public sealed class AgentWorker : BackgroundService
         }
         catch { s.Stale = true; /* keep last-known values, but flag them as possibly stale */ }
         s.Validators = assessments
-            .Select(a => new ValidatorView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant, committed.GetValueOrDefault(a.PublicKey), a.Note, a.Name))
+            .Select(a => new ValidatorView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant, committed.GetValueOrDefault(a.PublicKey), a.Note, a.Name, a.Allowed))
             .ToList();
         await _feed.PushState();
     }

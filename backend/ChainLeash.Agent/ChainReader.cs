@@ -36,7 +36,7 @@ public sealed class ChainReader
 
     // GovernedVault field indices (declaration order, 1-based — Odra reserves index 0).
     private const byte IxValueCap = 3, IxBond = 4, IxViolations = 5, IxNextId = 6,
-                       IxProposals = 8,
+                       IxAllowlist = 7, IxProposals = 8,
                        IxPaused = 11, IxMaxPerValidator = 12, IxMinActionInterval = 13,
                        IxLastActionTime = 14, IxCommitted = 15;
 
@@ -166,6 +166,21 @@ public sealed class ChainReader
     public async Task<uint> NextProposalId() => OdraBytes.U32(await ReadBytes(IxNextId));
     public async Task<ulong> LastActionTimeMs() => OdraBytes.U64(await ReadBytes(IxLastActionTime));
     public async Task<decimal> CommittedCspr(string validatorHex) => OdraBytes.U512Cspr(await ReadBytes(IxCommitted, Convert.FromHexString(validatorHex)));
+
+    /// Whether a validator is currently on the vault's ON-CHAIN allowlist (owner-controlled).
+    /// FAIL-SAFE for the agent's perception: only an EXPLICIT `false` (the owner removed it) counts
+    /// as disallowed; an unset key or a read error returns TRUE, so a hiccup can never make the
+    /// agent treat its own validators as off-policy and churn their stake. Read fresh (not long-
+    /// cached) so an owner allow/disallow takes effect on the next tick.
+    public async Task<bool> IsValidatorAllowed(string validatorHex)
+    {
+        try
+        {
+            var b = await ReadBytes(IxAllowlist, Convert.FromHexString(validatorHex));
+            return b is null || OdraBytes.Bool(b); // null (unset) → allowed; else the owner's explicit value
+        }
+        catch (ChainRpcException) { return true; } // transport hiccup → never wrongly disallow
+    }
 
     /// One on-chain proposal by id, or null if that id was never written.
     public async Task<OdraBytes.ChainProposal?> ProposalById(uint id)

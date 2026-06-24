@@ -223,6 +223,14 @@ public sealed class CasperVault
         BuildUnsignedOwnerTxJson("set_action_interval",
             new List<NamedArg> { new NamedArg("interval_ms", CLValue.U64(intervalMs)) }, 5_000_000_000UL);
 
+    /// Owner allows (true) or removes (false) a validator from the on-chain allowlist.
+    public string PrepareSetValidator(PublicKey validator, bool allowed) =>
+        BuildUnsignedOwnerTxJson("set_validator", new List<NamedArg>
+        {
+            new NamedArg("validator", CLValue.PublicKey(validator)),
+            new NamedArg("allowed", CLValue.Bool(allowed)),
+        }, 5_000_000_000UL);
+
     /// Confirm a wallet-submitted co-sign: verify on-chain that the tx executed
     /// successfully AND that it genuinely called approve_material(id) on THIS vault — so a
     /// random successful tx hash can't forge a "co-signed" audit entry. Because
