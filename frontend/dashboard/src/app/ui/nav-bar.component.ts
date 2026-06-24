@@ -16,9 +16,10 @@ import { Component, input } from '@angular/core';
           <span class="font-mono font-semibold tracking-[0.2em] text-[0.9rem] truncate">CHAINLEASH</span>
         </a>
 
-        <nav class="hidden md:flex items-center gap-7 text-cap text-steel font-mono" aria-label="Sections">
+        <nav class="hidden md:flex items-center gap-6 text-cap text-steel font-mono" aria-label="Sections">
           <a href="#how" class="hover:text-ink transition-colors">How it works</a>
           <a href="#who" class="hover:text-ink transition-colors">Who it's for</a>
+          <a href="#watch" class="hidden lg:inline hover:text-ink transition-colors">Watch</a>
           <a href="#console" class="hover:text-ink transition-colors">Live console</a>
           <a href="#deploy" class="hover:text-ink transition-colors">Deploy</a>
         </nav>

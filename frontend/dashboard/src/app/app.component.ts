@@ -7,6 +7,7 @@ import { NavBarComponent } from './ui/nav-bar.component';
 import { HeroComponent } from './ui/hero.component';
 import { HowItWorksComponent } from './ui/how-it-works.component';
 import { GuaranteeComponent } from './ui/guarantee.component';
+import { ExplainerComponent } from './ui/explainer.component';
 import { StatCardComponent } from './ui/stat-card.component';
 import { DeployComponent } from './ui/deploy.component';
 import { SiteFooterComponent } from './ui/site-footer.component';
@@ -39,7 +40,7 @@ interface FeedState {
     selector: 'app-root',
     imports: [
         NavBarComponent, HeroComponent, HowItWorksComponent,
-        GuaranteeComponent, StatCardComponent, PositionsComponent, InfoComponent, DeployComponent, SiteFooterComponent,
+        GuaranteeComponent, ExplainerComponent, StatCardComponent, PositionsComponent, InfoComponent, DeployComponent, SiteFooterComponent,
     ],
     templateUrl: './app.component.html',
     styleUrl: './app.component.scss'
