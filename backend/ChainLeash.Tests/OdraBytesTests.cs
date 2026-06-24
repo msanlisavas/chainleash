@@ -143,9 +143,20 @@ public class OdraErrorsTests
     [InlineData("User error: 64540")]          // framework range, not a vault code — never mislabel
     [InlineData("User error: 60000")]          // not a discriminant we know
     [InlineData("Out of gas error")]           // not a user revert at all
+    [InlineData("ApiError::AuctionError(SomeUnknownThing) [9]")] // auction error we don't have help for
     [InlineData(null)]
     public void Humanize_passes_everything_else_through(string? raw) =>
         Assert.Equal(raw, OdraErrors.Humanize(raw));
+
+    [Fact]
+    public void Humanize_explains_known_auction_reverts_in_plain_english()
+    {
+        var r = OdraErrors.Humanize("ApiError::AuctionError(DelegatorNotFound) [64520]");
+        Assert.Contains("DelegatorNotFound", r);
+        Assert.Contains("settling", r);          // the redelegate-not-settled explanation
+        Assert.DoesNotContain("64520", r);       // raw code is replaced, not appended
+        Assert.Contains("minimum delegation", OdraErrors.Humanize("ApiError::AuctionError(DelegationAmountTooSmall) [64557]"));
+    }
 }
 
 /// Replay-protection set: bounded, atomic claims, and release must not leave stale

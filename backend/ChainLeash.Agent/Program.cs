@@ -292,10 +292,15 @@ app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault
     if (!r.Success)
     {
         var err = r.Error ?? "";
-        if (err.Contains("timeout", StringComparison.OrdinalIgnoreCase) || err.Contains("cancelled", StringComparison.OrdinalIgnoreCase))
-            consumedCoSign.Remove(hash); // simply not visible yet — allow a retry
-        log.LogInformation("owner action {Action} not confirmed: {Err}", action, r.Error); // detail stays server-side
-        return Results.Json(new { Success = false, Error = "not confirmed on-chain" }, statusCode: 400);
+        var transient = err.Contains("timeout", StringComparison.OrdinalIgnoreCase) || err.Contains("cancelled", StringComparison.OrdinalIgnoreCase);
+        if (transient) consumedCoSign.Remove(hash); // simply not visible yet — allow a retry
+        log.LogInformation("owner action {Action} not confirmed: {Err}", action, r.Error);
+        // The on-chain revert reason (a contract/auction error) is safe to show — the action is
+        // owner-gated, so it isn't attacker-controlled — and far more useful than a bare 400. Return
+        // 200 so the dashboard renders the reason (a 400 surfaces only as a generic "Http failure").
+        var shown = transient ? "Not confirmed on-chain yet — please retry in a moment."
+                              : string.IsNullOrWhiteSpace(err) ? "The action did not succeed on-chain." : err;
+        return Results.Json(new { Success = false, Error = shown });
     }
 
     // Optimistic, chain-truthful update so the dashboard reflects the action immediately — the
