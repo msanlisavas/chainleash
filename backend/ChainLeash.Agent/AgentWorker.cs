@@ -31,6 +31,7 @@ public sealed class AgentWorker : BackgroundService
     private int _failStreak;      // consecutive failed on-chain actions → exponential backoff
     private int _backoffUntilTick;
     private string? _lastTickError; // edge-trigger the tick-error HOLD so an outage doesn't flood the feed
+    private string? _lastIdleHold;  // de-dupe the idle "nothing off-policy" HOLD so steady-state doesn't bury the real story (the live heartbeat shows the agent is still watching)
     private const int GasCheckEveryNTicks = 6; // agent gas changes only on spend → refresh ~hourly at 600s, not every tick
 
     public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators,
@@ -110,6 +111,7 @@ public sealed class AgentWorker : BackgroundService
 
     private async Task Tick(decimal chunk, int maxActions, int maxBuys, CancellationToken ct)
     {
+        _feed.State.LastCheckedIso = DateTime.UtcNow.ToString("o"); // heartbeat: the agent evaluated the vault now
         // 1) Read the vault's REAL state from chain (gas-free). A failed read THROWS
         //    (ChainRpcException) — the agent must never act on fabricated defaults like
         //    "kill-switch off" or "cap 0"; the loop's catch emits HOLD and flags Stale.
@@ -161,7 +163,11 @@ public sealed class AgentWorker : BackgroundService
         if (!hasBreach && !canDeploy)
         {
             var seen = best.PublicKey is not null ? $"best {best.PublicKey[..10]}… ({best.Note})" : "no compliant validator";
-            await Emit("HOLD", $"Chain: free {free:N0} CSPR, {assessments.Count} validators, {seen}; nothing off-policy → chose not to act (no spend).");
+            var msg = $"Chain: free {free:N0} CSPR, {assessments.Count} validators, {seen}; nothing off-policy → chose not to act (no spend).";
+            // Only log a fresh HOLD when the decision actually changes (e.g. free balance moved); a
+            // run of identical idle ticks would otherwise bury the real moves. The live heartbeat
+            // (LastCheckedIso, pushed every tick by RefreshState) shows the agent is still watching.
+            if (msg != _lastIdleHold) { _lastIdleHold = msg; await Emit("HOLD", msg); }
             return;
         }
         if (_actions >= maxActions) { await Emit("HOLD", $"On-chain action budget spent ({_actions}) → holding."); return; }

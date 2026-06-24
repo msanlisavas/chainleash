@@ -48,6 +48,7 @@ public sealed class FeedState
     public int Violations { get; set; }
     public decimal AgentGasCspr { get; set; }       // agent account balance (pays tx gas) — ops/health
     public bool Stale { get; set; }                 // true if the last chain read failed (values may be stale)
+    public string? LastCheckedIso { get; set; }     // when the agent last evaluated the vault — drives the live "watching" heartbeat
     public List<ValidatorView> Validators { get; set; } = new();
     public List<ProposalView> Proposals { get; set; } = new();
 }
