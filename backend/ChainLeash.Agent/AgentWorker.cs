@@ -143,7 +143,17 @@ public sealed class AgentWorker : BackgroundService
 
         // Decide whether there's anything to do FIRST — at a per-era cadence most ticks are HOLDs,
         // and a HOLD tick must not spend node-RPCs reading the on-chain cooldown it will never use.
-        var breach = assessments.FirstOrDefault(a => !a.Compliant && committed.GetValueOrDefault(a.PublicKey) > 0);
+        // A validator with an already-queued (unresolved) material proposal must NOT be acted on
+        // again: a >cap breach is escalated to a co-sign proposal that leaves `committed` intact
+        // (only the owner's approval moves the stake), so without this guard the agent would
+        // re-propose the same exit every tick — spamming the co-sign queue and starving routine
+        // deploys. Treat a validator with a pending proposal as handled until the owner resolves it.
+        var pendingProposalValidators = new HashSet<string>(
+            _feed.State.Proposals.Where(p => !p.Resolved).Select(p => p.Validator),
+            StringComparer.OrdinalIgnoreCase);
+        var breach = assessments.FirstOrDefault(a => !a.Compliant
+            && committed.GetValueOrDefault(a.PublicKey) > 0
+            && !pendingProposalValidators.Contains(a.PublicKey));
         var best = assessments.FirstOrDefault(a => a.Compliant);
         var hasBreach = breach.PublicKey is not null && committed.GetValueOrDefault(breach.PublicKey) > 0;
         var canDeploy = StakingPolicy.CanDeploy(free, chunk, best.PublicKey is not null, best.Compliant);
