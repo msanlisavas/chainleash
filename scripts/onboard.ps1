@@ -12,7 +12,7 @@
     bond    → (optional) post the agent's slashable bond
     point   → write the new package hash + allowlist into the agent's appsettings.local.json
 
-  Each step reuses a proven spike command (dotnet run -- <cmd>); see CLAUDE.md / RUNBOOK.
+  Each step reuses a proven spike command (dotnet run -- <cmd>); see RUNBOOK.md.
 
 .PREREQUISITES
   - spike/ChainLeash.Spike/Config/settings.local.json with CsprCloudAccessKey + the agent
