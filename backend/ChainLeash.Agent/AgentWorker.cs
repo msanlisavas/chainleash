@@ -32,6 +32,8 @@ public sealed class AgentWorker : BackgroundService
     private int _backoffUntilTick;
     private string? _lastTickError; // edge-trigger the tick-error HOLD so an outage doesn't flood the feed
     private string? _lastIdleHold;  // de-dupe the idle "nothing off-policy" HOLD so steady-state doesn't bury the real story (the live heartbeat shows the agent is still watching)
+    private DateTime _lastIdleHoldAt; // …but re-print the idle status at least this often so a de-duped feed never LOOKS frozen for days
+    private static readonly TimeSpan IdleHoldRefresh = TimeSpan.FromMinutes(30);
     private const int GasCheckEveryNTicks = 6; // agent gas changes only on spend → refresh ~hourly at 600s, not every tick
 
     public AgentWorker(ILogger<AgentWorker> log, CasperVault vault, X402Client x402, ValidatorMonitor validators,
@@ -67,7 +69,15 @@ public sealed class AgentWorker : BackgroundService
             try
             {
                 await Tick(chunk, maxActions, maxBuys, ct);
-                _lastTickError = null;
+                if (_lastTickError is not null)
+                {
+                    // Recovered from a tick-error episode (e.g. a transient node hiccup that the
+                    // fail-safe correctly HELD on). Emit a RESUMED line so a days-old red error stops
+                    // dominating the feed, and force the next idle status to re-print fresh.
+                    _lastTickError = null;
+                    _lastIdleHold = null;
+                    await Emit("ONLINE", "Chain reads recovered — resumed watching the vault.");
+                }
             }
             catch (Exception ex)
             {
@@ -167,7 +177,13 @@ public sealed class AgentWorker : BackgroundService
             // Only log a fresh HOLD when the decision actually changes (e.g. free balance moved); a
             // run of identical idle ticks would otherwise bury the real moves. The live heartbeat
             // (LastCheckedIso, pushed every tick by RefreshState) shows the agent is still watching.
-            if (msg != _lastIdleHold) { _lastIdleHold = msg; await Emit("HOLD", msg); }
+            // But re-print at least every IdleHoldRefresh so a long de-duped run never LOOKS frozen —
+            // the "positions/rewards stuck" report was a static feed, not a stalled agent.
+            if (msg != _lastIdleHold || DateTime.UtcNow - _lastIdleHoldAt > IdleHoldRefresh)
+            {
+                _lastIdleHold = msg; _lastIdleHoldAt = DateTime.UtcNow;
+                await Emit("HOLD", msg);
+            }
             return;
         }
         if (_actions >= maxActions) { await Emit("HOLD", $"On-chain action budget spent ({_actions}) → holding."); return; }

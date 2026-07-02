@@ -9,10 +9,13 @@ namespace ChainLeash.Agent;
 /// (HTTP 429 on the shared CSPR.cloud key, transport faults, non-JSON bodies) must
 /// surface, or the agent would act on a fabricated leash state (kill-switch silently
 /// reading as off, cap reading as 0).
-public sealed class ChainRpcException(string method, string detail, bool notFound = false)
+public sealed class ChainRpcException(string method, string detail, bool notFound = false, bool transient = false)
     : Exception($"RPC {method}: {detail}")
 {
     public bool NotFound { get; } = notFound;
+    /// True when the failure is worth retrying on the fallback node (transport fault or HTTP
+    /// 429/5xx) — NOT a value-not-found or an RPC-level error, which are real answers.
+    public bool Transient { get; } = transient;
 }
 
 /// Reads the GovernedVault's live state directly from chain with ZERO gas. Odra stores
@@ -23,6 +26,8 @@ public sealed class ChainRpcException(string method, string detail, bool notFoun
 public sealed class ChainReader
 {
     private readonly string _node;
+    private readonly string? _fallbackNode; // CSPR.cloud node-RPC proxy: the reliable retry when the free node hiccups
+    private DateTime _primaryColdUntil = DateTime.MinValue; // brief cooldown after a primary failure → skip it, go straight to fallback
     private readonly string _pkg;
     private readonly HttpClient _http; // one shared client — a fresh one per RPC churns sockets in a 24/7 daemon
     private string? _stateUref;
@@ -44,11 +49,53 @@ public sealed class ChainReader
     {
         _node = cfg["Casper:NodeRpcUrl"]!;
         _pkg = cfg["Casper:GovernedVaultPackageHash"]!.Replace("hash-", "");
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        // A 24/7 daemon reuses pooled sockets; the free public node (behind an LB) silently drops idle
+        // keep-alives, and .NET's default pool would then reuse a DEAD socket and block reading the
+        // response until HttpClient.Timeout — the exact "request was canceled … 30 seconds" hang we saw
+        // (SocketException 125 on a dictionary read). Recycle connections well before the LB reaps them,
+        // connect fast, and cap a single read at 12s (a healthy dictionary read is <1s), so a hiccup
+        // costs seconds and trips the fallback, not a whole 30s HOLD.
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromSeconds(90),
+            PooledConnectionIdleTimeout = TimeSpan.FromSeconds(20),
+            ConnectTimeout = TimeSpan.FromSeconds(8),
+        };
+        _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(cfg.GetValue("Casper:NodeRpcTimeoutSeconds", 12)) };
         var key = cfg["Casper:CsprCloudAccessKey"];
-        if (!string.IsNullOrWhiteSpace(key)) _http.DefaultRequestHeaders.Add("Authorization", key);
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            _http.DefaultRequestHeaders.Add("Authorization", key); // ignored by the public node; required by CSPR.cloud's
+            // Reliable recovery path: when the free public node hiccups, retry ONCE on CSPR.cloud's
+            // node-RPC proxy — a fresh connection to more reliable infra. Only used on a transient
+            // primary failure (plus a short cooldown), so steady-state stays on the free node and
+            // CSPR.cloud's daily node-RPC quota is barely touched.
+            _fallbackNode = FallbackNodeUrl(cfg, _node);
+        }
         _configTtl = TimeSpan.FromSeconds(cfg.GetValue("Agent:ConfigCacheSeconds", 1800));
     }
+
+    /// The CSPR.cloud node-RPC proxy URL used as the reliable retry when the primary node fails.
+    /// Explicit `Casper:CsprCloudNodeRpcUrl` wins; else derived from the REST base
+    /// (api.&lt;net&gt;.cspr.cloud → node.&lt;net&gt;.cspr.cloud/rpc). Null when it would equal the
+    /// primary (no point retrying the same endpoint).
+    public static string? FallbackNodeUrl(IConfiguration cfg, string primary)
+    {
+        var url = cfg["Casper:CsprCloudNodeRpcUrl"];
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            var rest = (cfg["Casper:CsprCloudBaseUrl"] ?? "https://api.testnet.cspr.cloud").TrimEnd('/');
+            url = rest.Replace("//api.", "//node.") + "/rpc";
+        }
+        return string.Equals(url, primary, StringComparison.OrdinalIgnoreCase) ? null : url;
+    }
+
+    /// Transient = worth retrying on the fallback node: a transport fault (stale socket, connect/read
+    /// timeout, DNS) or an HTTP 429/5xx. A value-not-found (unset dictionary key) or an RPC-level
+    /// error is a real ANSWER from a healthy node — never retried.
+    public static bool IsTransient(Exception ex) =>
+        ex is TaskCanceledException or OperationCanceledException or HttpRequestException or System.IO.IOException
+        || ex is ChainRpcException { Transient: true };
 
     /// Serve a rarely-changing config field from cache for _configTtl. Safe because these values are
     /// either ENFORCED on-chain (cap/per-validator-cap/action-interval — a stale read just risks one
@@ -66,12 +113,32 @@ public sealed class ChainReader
     private async Task<JsonElement> Rpc(string method, object prms)
     {
         var body = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method, @params = prms });
+        // If the primary just failed transiently, skip it for a short cooldown and go straight to the
+        // fallback — otherwise every read in a tick would eat the primary's timeout before falling back.
+        if (_fallbackNode is not null && DateTime.UtcNow < _primaryColdUntil)
+            return await RpcOn(_fallbackNode, method, body);
+        try
+        {
+            return await RpcOn(_node, method, body);
+        }
+        catch (Exception ex) when (_fallbackNode is not null && IsTransient(ex))
+        {
+            _primaryColdUntil = DateTime.UtcNow.AddSeconds(60); // stop hammering the sick free node this minute
+            return await RpcOn(_fallbackNode, method, body);
+        }
+    }
+
+    private async Task<JsonElement> RpcOn(string node, string method, string body)
+    {
         var content = new StringContent(body, Encoding.UTF8, "application/json");
         content.Headers.ContentType!.CharSet = null; // node.testnet.casper.network rejects the "; charset=utf-8" param (400)
-        using var resp = await _http.PostAsync(_node, content);
+        using var resp = await _http.PostAsync(node, content);
         var text = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode) // CSPR.cloud 429s arrive as non-JSON error pages
-            throw new ChainRpcException(method, $"HTTP {(int)resp.StatusCode}");
+        {
+            var status = (int)resp.StatusCode;
+            throw new ChainRpcException(method, $"HTTP {status}", transient: status == 429 || status >= 500);
+        }
         JsonDocument doc;
         try { doc = JsonDocument.Parse(text); }
         catch (JsonException) { throw new ChainRpcException(method, "non-JSON RPC response"); }
