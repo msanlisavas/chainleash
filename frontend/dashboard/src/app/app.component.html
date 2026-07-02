@@ -336,7 +336,9 @@
                 <span>commission <b class="text-ink">{{ v.feePercent }}%</b></span>
                 <span>{{ v.active ? 'active' : 'inactive' }}</span>
                 @if (v.delegatedCspr > 0) {
-                  @if (isSettling(v)) {
+                  @if (isStranded(v)) {
+                    <span class="text-amber">stranded <b>{{ fmt(v.delegatedCspr) }}</b> CSPR <span class="text-mute/70">(below min — needs owner action)</span></span>
+                  } @else if (isSettling(v)) {
                     <span class="text-amber">settling <b>{{ fmt(v.delegatedCspr) }}</b> CSPR <span class="text-mute/70">(~7 eras)</span></span>
                   } @else {
                     <span>committed <b class="text-ink">{{ fmt(v.delegatedCspr) }}</b> CSPR</span>

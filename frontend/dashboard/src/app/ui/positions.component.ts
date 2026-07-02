@@ -59,7 +59,7 @@ export interface Staking {
                       </a>
                     </td>
                     <td class="py-2.5 px-3" [class]="p.compliant ? 'text-ink' : 'text-redtext'">{{ p.feePercent }}%</td>
-                    <td class="py-2.5 px-3 text-mute">{{ p.status }}</td>
+                    <td class="py-2.5 px-3" [class]="p.status.includes('needs owner action') ? 'text-amber' : 'text-mute'">{{ p.status }}</td>
                     <td class="py-2.5 px-3 text-right text-ink tnum">{{ fmt(p.principalCspr) }}</td>
                     <td class="py-2.5 px-3 text-right text-ink tnum">{{ fmt(p.currentStakeCspr) }}</td>
                     <td class="py-2.5 pl-3 text-right tnum" [class]="p.rewardCspr > 0 ? 'text-green' : 'text-mute'">

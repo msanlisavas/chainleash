@@ -22,6 +22,7 @@ public sealed class StakingService
     private readonly HttpClient _http;
     private readonly string _restBase;
     private readonly TimeSpan _ttl;
+    private readonly decimal _minDelegation;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private StakingView? _cache;
     private DateTime _cacheAt;
@@ -34,6 +35,7 @@ public sealed class StakingService
         var key = cfg["Casper:CsprCloudAccessKey"];
         if (!string.IsNullOrWhiteSpace(key)) _http.DefaultRequestHeaders.Add("Authorization", key);
         _ttl = TimeSpan.FromSeconds(cfg.GetValue("Agent:ValidatorCacheSeconds", 1800));
+        _minDelegation = cfg.GetValue("Staking:MinDelegationCspr", 500m);
     }
 
     public async Task<StakingView> GetAsync(CancellationToken ct = default)
@@ -79,9 +81,15 @@ public sealed class StakingService
             var reward = RewardMath.RewardCspr(current, principal);
             var status =
                 exiting.Contains(a.PublicKey) ? "Exit proposed — awaiting owner co-sign"
-                // Directed but no active delegation yet: a redelegation/new delegation still settling
-                // through Casper's ~7-era unbonding queue (the stake has left the source, not yet bonded).
-                : principal > 0m && current <= 0m ? "Settling (~7 eras)"
+                : principal > 0m && current <= 0m
+                    // Directed but no active delegation. If the directed principal is at/below the network
+                    // minimum, a NEW delegation there can never bond (DelegationAmountTooSmall) — so this
+                    // isn't "settling", it's a stranded/phantom position that needs owner reconciliation.
+                    // Above the minimum it's a redelegation/new delegation still moving through Casper's
+                    // ~7-era unbonding queue (stake left the source, not yet bonded).
+                    ? (principal <= _minDelegation
+                        ? "Unbonded — below the network minimum; needs owner action"
+                        : "Settling (~7 eras)")
                 : principal <= 0m && current > 0m ? "Unbonding"
                 : "Delegated";
             positions.Add(new PositionView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant,

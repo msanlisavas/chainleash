@@ -27,6 +27,14 @@ public static class StakingPolicy
     /// How much to pull when exiting a breaching validator: its position, capped per action.
     public static decimal ExitAmount(decimal position, decimal cap) => Math.Min(position, cap);
 
+    /// Whether a delegate/redelegate of `amount` will actually BOND. Casper rejects a delegation
+    /// that would OPEN a new position at or below the network minimum delegation amount
+    /// (AuctionError::DelegationAmountTooSmall) — but topping up a position the vault already holds
+    /// always clears the minimum. Gating on this stops the agent stranding a chunk as phantom
+    /// `committed` (the 0147c incident: a 500-CSPR redelegate into a fresh validator, min = 500).
+    public static bool BondWouldStick(decimal amount, decimal existingPosition, decimal minDelegation) =>
+        existingPosition > 0m || amount > minDelegation;
+
     /// A move is "material" — needs human co-sign — if it exceeds the per-action cap OR the
     /// paid risk read came back elevated.
     public static bool RequiresProposal(decimal amount, decimal cap, bool elevatedRisk) =>

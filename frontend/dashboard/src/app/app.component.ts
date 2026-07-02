@@ -289,6 +289,18 @@ export class AppComponent implements OnInit, OnDestroy {
     return v.delegatedCspr > 0 && this.actualStake(v) === 0;
   }
 
+  /** The backend-computed status of this validator's position (authoritative), or '' if unloaded. */
+  private positionStatus(v: ValidatorView): string {
+    return (this.staking()?.positions ?? [])
+      .find(p => p.publicKey.toLowerCase() === v.publicKey.toLowerCase())?.status ?? '';
+  }
+
+  /** True when a directed position can never bond (principal ≤ the network minimum) — stranded /
+   *  phantom committed that needs owner reconciliation, NOT a normal ~7-era settle. */
+  isStranded(v: ValidatorView): boolean {
+    return this.positionStatus(v).includes('needs owner action');
+  }
+
   /** Validators the owner can actually recall NOW (a real on-chain delegation exists). */
   committedValidators(): ValidatorView[] {
     return (this.state()?.validators ?? []).filter(v => this.recallableCspr(v) > 0);

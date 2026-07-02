@@ -61,4 +61,18 @@ public class StakingPolicyTests
     [InlineData(300, 600, false)]  // under the cap → routine exit
     public void MustEscalateExit_only_above_the_cap(decimal position, decimal cap, bool expected) =>
         Assert.Equal(expected, StakingPolicy.MustEscalateExit(position, cap));
+
+    [Theory]
+    // Opening a NEW position (no existing stake): must exceed the network minimum, else the auction
+    // rejects it as DelegationAmountTooSmall and the stake strands as phantom committed (0147c).
+    [InlineData(500, 0, 500, false)]    // 500 into a fresh validator, min 500 → would NOT bond (the incident)
+    [InlineData(501, 0, 500, true)]     // just over the minimum → bonds
+    [InlineData(1000, 0, 500, true)]    // comfortably over → bonds
+    [InlineData(400, 0, 500, false)]    // below the minimum → would NOT bond
+    // Topping up an EXISTING position always clears the minimum, regardless of the added amount.
+    [InlineData(500, 6000, 500, true)]  // add 500 to an existing 6000 position → bonds
+    [InlineData(1, 500, 500, true)]     // even a tiny top-up of an existing position → bonds
+    public void BondWouldStick_guards_new_positions_at_the_network_minimum(
+        decimal amount, decimal existingPosition, decimal minDelegation, bool expected) =>
+        Assert.Equal(expected, StakingPolicy.BondWouldStick(amount, existingPosition, minDelegation));
 }

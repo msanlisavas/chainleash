@@ -166,7 +166,17 @@ public sealed class AgentWorker : BackgroundService
         var breach = assessments.FirstOrDefault(a => !a.Compliant
             && committed.GetValueOrDefault(a.PublicKey) > 0
             && !pendingProposalValidators.Contains(a.PublicKey));
-        var best = assessments.FirstOrDefault(a => a.Compliant);
+        var minDelegation = _cfg.GetValue("Staking:MinDelegationCspr", 500m);
+        var deployAmt = StakingPolicy.DeployAmount(free, chunk);
+        // Prefer a compliant validator this deploy will actually BOND into: topping up an existing
+        // position always clears the network minimum, but opening a NEW one needs amount > minDelegation
+        // — else the auction rejects it (DelegationAmountTooSmall) and the stake strands as phantom
+        // `committed` (the 0147c incident). Fall back to any compliant validator so the breach/idle
+        // paths below behave exactly as before when nothing is stickable.
+        var stickableBest = assessments.FirstOrDefault(a => a.Compliant
+                     && StakingPolicy.BondWouldStick(deployAmt, committed.GetValueOrDefault(a.PublicKey), minDelegation));
+        var best = stickableBest.PublicKey is not null ? stickableBest : assessments.FirstOrDefault(a => a.Compliant);
+        var bestExisting = best.PublicKey is not null ? committed.GetValueOrDefault(best.PublicKey) : 0m;
         var hasBreach = breach.PublicKey is not null && committed.GetValueOrDefault(breach.PublicKey) > 0;
         var canDeploy = StakingPolicy.CanDeploy(free, chunk, best.PublicKey is not null, best.Compliant);
 
@@ -230,8 +240,8 @@ public sealed class AgentWorker : BackgroundService
             catch (Exception ex) { _log.LogWarning("x402 read unavailable ({Msg}) — proceeding on free policy signal.", ex.Message); }
         }
 
-        if (hasBreach) await ExitBreach(breach, best, committed.GetValueOrDefault(breach.PublicKey!), cap, ct);
-        else await Deploy(best, StakingPolicy.DeployAmount(free, chunk), cap, escalate, ct);
+        if (hasBreach) await ExitBreach(breach, best, committed.GetValueOrDefault(breach.PublicKey!), bestExisting, cap, minDelegation, ct);
+        else await Deploy(best, deployAmt, cap, bestExisting, minDelegation, escalate, ct);
     }
 
     /// Track action outcomes: success resets the failure streak; a failed (reverted or
@@ -248,7 +258,7 @@ public sealed class AgentWorker : BackgroundService
 
     /// A delegated validator broke policy → redelegate its stake to the best compliant
     /// validator (single native tx); undelegate to the vault if none is compliant.
-    private async Task ExitBreach(ValidatorMonitor.Assessment breach, ValidatorMonitor.Assessment best, decimal position, decimal cap, CancellationToken ct)
+    private async Task ExitBreach(ValidatorMonitor.Assessment breach, ValidatorMonitor.Assessment best, decimal position, decimal bestExisting, decimal cap, decimal minDelegation, CancellationToken ct)
     {
         var amount = StakingPolicy.ExitAmount(position, cap);
         var from = PublicKey.FromHexString(breach.PublicKey);
@@ -260,7 +270,11 @@ public sealed class AgentWorker : BackgroundService
             await Propose(from, position, undelegate: true, $"exit breaching validator (position {position} > cap {cap})", ct);
             return;
         }
-        if (hasDestination)
+        // Redelegate ONLY into a destination the stake will actually bond into — an existing position,
+        // or a new one above the network minimum. Otherwise the redelegate's deferred re-bond fails
+        // (DelegationAmountTooSmall) and the stake strands as phantom committed (0147c incident); pull it
+        // back to the vault instead, which always bonds to the purse.
+        if (hasDestination && StakingPolicy.BondWouldStick(amount, bestExisting, minDelegation))
         {
             var bestPk = best.PublicKey!;
             await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… ({breach.Note}) — redelegating {amount} CSPR → {bestPk[..10]}… ({best.Note}).", validator: breach.PublicKey, amountCspr: amount);
@@ -270,6 +284,8 @@ public sealed class AgentWorker : BackgroundService
             await TrackOutcome(r);
             return;
         }
+        if (hasDestination) // there was a compliant destination, but a redelegate there wouldn't bond
+            await Emit("PERCEIVE", $"Policy breach on {breach.PublicKey[..10]}… — best destination {best.PublicKey![..10]}… is a new position below the {minDelegation:N0} CSPR minimum; pulling {amount} CSPR back to the vault instead of stranding it.", validator: breach.PublicKey, amountCspr: amount);
         var u = await _vault.Undelegate(from, Motes(amount), ct);
         await Audit("UNDELEGATE", breach.PublicKey, amount, u);
         if (u.Success) _actions++;
@@ -277,8 +293,16 @@ public sealed class AgentWorker : BackgroundService
     }
 
     /// Idle treasury + a compliant best validator → deploy a chunk into it (or escalate).
-    private async Task Deploy(ValidatorMonitor.Assessment best, decimal amount, decimal cap, bool escalate, CancellationToken ct)
+    private async Task Deploy(ValidatorMonitor.Assessment best, decimal amount, decimal cap, decimal existingPosition, decimal minDelegation, bool escalate, CancellationToken ct)
     {
+        if (!StakingPolicy.BondWouldStick(amount, existingPosition, minDelegation))
+        {
+            // Opening a NEW position with a chunk at/below the network minimum is rejected on-chain
+            // (DelegationAmountTooSmall) and would strand the stake as phantom committed. Hold and let
+            // free balance accumulate until it clears the minimum (or an existing position to top up appears).
+            await Emit("HOLD", $"Best compliant validator {best.PublicKey![..10]}… has no existing position; a new delegation of {amount:N0} CSPR ≤ the {minDelegation:N0} CSPR network minimum would be rejected on-chain. Holding to accumulate before opening it.");
+            return;
+        }
         var validator = PublicKey.FromHexString(best.PublicKey);
         if (StakingPolicy.RequiresProposal(amount, cap, escalate))
         {
