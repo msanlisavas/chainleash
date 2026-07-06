@@ -282,7 +282,7 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
     }
     catch (Exception ex)
     {
-        lf.CreateLogger("Owner").LogWarning(ex, "owner prepare ({Action}) failed", action); // detail stays server-side
+        lf.CreateLogger("Owner").LogWarning(ex, "owner prepare ({Action}) failed", OwnerActions.LogSafe(action)); // detail stays server-side
         return Results.Json(new { error = "could not build the owner transaction" }, statusCode: 500);
     }
 }).RequireRateLimiting("cosign");
@@ -308,7 +308,7 @@ app.MapPost("/api/owner/confirm", async (OwnerConfirmReq body, CasperVault vault
         var err = r.Error ?? "";
         var transient = err.Contains("timeout", StringComparison.OrdinalIgnoreCase) || err.Contains("cancelled", StringComparison.OrdinalIgnoreCase);
         if (transient) consumedCoSign.Remove(hash); // simply not visible yet — allow a retry
-        log.LogInformation("owner action {Action} not confirmed: {Err}", action, r.Error);
+        log.LogInformation("owner action {Action} not confirmed: {Err}", OwnerActions.LogSafe(action), OwnerActions.LogSafe(r.Error));
         // The on-chain revert reason (a contract/auction error) is safe to show — the action is
         // owner-gated, so it isn't attacker-controlled — and far more useful than a bare 400. Return
         // 200 so the dashboard renders the reason (a 400 surfaces only as a generic "Http failure").
@@ -470,4 +470,10 @@ static class OwnerActions
     }
 
     static string Short(string? s) => s is { Length: > 10 } ? s[..10] + "…" : (s ?? "");
+
+    /// Strip CR/LF/TAB from a user-derived value before it reaches a log line — defense-in-depth
+    /// against log forging. `action` is already matched against a fixed allowlist before it is
+    /// logged, so this is belt-and-suspenders, but sanitizing at the sink keeps both the logs and
+    /// the static analyzer unambiguous.
+    public static string LogSafe(string? s) => (s ?? "").Replace("\r", "").Replace("\n", "").Replace("\t", " ");
 }
