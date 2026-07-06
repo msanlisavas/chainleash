@@ -179,6 +179,23 @@
                   }
                 </div>
 
+                <!-- Reconcile phantom committed (validator left the auction) -->
+                @if (vanishedPositions().length > 0) {
+                  <div>
+                    <p class="text-mute text-meta mb-1.5 uppercase tracking-wide">Reconcile stale committed <span class="normal-case text-mute/70">(validator left the auction — no funds move)</span></p>
+                    @for (v of vanishedPositions(); track v.publicKey) {
+                      <button class="btn btn-ghost w-full mb-2 last:mb-0 flex items-center justify-between gap-2"
+                              (click)="clearStaleCommitted(v)" [disabled]="walletBusy()" [attr.aria-busy]="ownerBusy() === clearLabel(v)">
+                        @if (ownerBusy() === clearLabel(v)) { <span class="spin anim-spin" aria-hidden="true"></span> <span>clearing…</span> }
+                        @else {
+                          <span>Clear <b class="font-mono">{{ fmt(v.delegatedCspr) }}</b> CSPR stale</span>
+                          <span class="font-mono text-mute text-mini">{{ short(v.publicKey) }}</span>
+                        }
+                      </button>
+                    }
+                  </div>
+                }
+
                 <!-- Withdraw free balance -->
                 <div>
                   <p class="text-mute text-meta mb-1.5 uppercase tracking-wide">Withdraw free balance → your wallet</p>
@@ -338,6 +355,8 @@
                 @if (v.delegatedCspr > 0) {
                   @if (isStranded(v)) {
                     <span class="text-amber">stranded <b>{{ fmt(v.delegatedCspr) }}</b> CSPR <span class="text-mute/70">(below min — needs owner action)</span></span>
+                  } @else if (isVanished(v)) {
+                    <span class="text-amber">left the auction — <b>{{ fmt(v.delegatedCspr) }}</b> CSPR stale <span class="text-mute/70">(clear stale committed)</span></span>
                   } @else if (isSettling(v)) {
                     <span class="text-amber">settling <b>{{ fmt(v.delegatedCspr) }}</b> CSPR <span class="text-mute/70">(~7 eras)</span></span>
                   } @else {
@@ -367,10 +386,15 @@
                 }
               </div>
               <div class="font-mono text-mini text-mute mt-1">→ {{ short(p.validator) }}</div>
+              @if (proposalValidatorActive(p) === false) {
+                <p class="text-redtext text-mini mt-2" role="alert">
+                  This validator has left the auction — co-signing reverts on-chain (ValidatorNotFound). Reject it instead.
+                </p>
+              }
               @if (config()?.walletCoSignEnabled) {
                 <button class="btn btn-primary w-full mt-3"
                         (click)="coSignWallet(p)"
-                        [disabled]="walletBusy() || coSignBlocked() !== null"
+                        [disabled]="walletBusy() || coSignBlocked() !== null || proposalValidatorActive(p) === false"
                         [attr.aria-busy]="coSigning() === p.id">
                   @if (coSigning() === p.id && coSignPhase() === 'wallet') { <span class="spin anim-spin" aria-hidden="true"></span> approve in your wallet… }
                   @else if (coSigning() === p.id && coSignPhase() === 'confirm') { <span class="spin anim-spin" aria-hidden="true"></span> confirming on-chain (≈1 min)… }

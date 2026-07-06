@@ -266,6 +266,7 @@ app.MapPost("/api/owner/prepare", (OwnerPrepareReq body, CasperVault vault, ILog
             "undelegate" => vault.PrepareOwnerUndelegate(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), OwnerActions.ToMotes(body.AmountCspr)),
             "redelegate" => vault.PrepareOwnerRedelegate(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator)), PublicKey.FromHexString(OwnerActions.RequireHex(body.NewValidator)), OwnerActions.ToMotes(body.AmountCspr)),
             "reject"     => vault.PrepareRejectMaterial((uint)OwnerActions.RequireId(body!.Id)),
+            "clearcommitted" => vault.PrepareClearCommitted(PublicKey.FromHexString(OwnerActions.RequireHex(body!.Validator))),
             "raisecap"   => vault.PrepareRaiseCap(OwnerActions.ToMotes(body!.AmountCspr)),
             "setmaxval"  => vault.PrepareSetMaxPerValidator(OwnerActions.ToMotesAllowZero(body!.AmountCspr)),
             "setcooldown"=> vault.PrepareSetActionInterval(OwnerActions.ToMs(body!.IntervalSeconds)),
@@ -357,6 +358,7 @@ static class OwnerActions
         "undelegate"         => "owner_undelegate",
         "redelegate"         => "owner_redelegate",
         "reject"             => "reject_material",
+        "clearcommitted"     => "owner_clear_committed",
         "raisecap"           => "raise_cap",
         "setmaxval"          => "set_max_per_validator",
         "setcooldown"        => "set_action_interval",
@@ -425,6 +427,9 @@ static class OwnerActions
                 if (body.Id is { } id and >= 0)
                     s.Proposals = s.Proposals.Select(p => p.Id == (uint)id ? p with { Resolved = true } : p).ToList();
                 return $"Owner rejected material proposal #{body.Id} — resolved without executing.";
+            case "clearcommitted":
+                ReduceCommitted(s, body.Validator, decimal.MaxValue); // zero the phantom directed stake in the view
+                return $"Owner cleared stale committed for {Short(body.Validator)} — validator left the auction; no funds moved.";
             case "raisecap":
                 s.CapCspr = amt;
                 return $"Owner raised the per-action cap to {amt:N0} CSPR.";

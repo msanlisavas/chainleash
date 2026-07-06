@@ -72,6 +72,42 @@ describe('AppComponent', () => {
     expect(c.txLink(undefined)).toBeNull();
   });
 
+  it('flags a proposal whose validator left the auction and lists it as a vanished position', () => {
+    c.state.set({
+      validators: [{ publicKey: '01ab', feePercent: -1, active: false, compliant: false, delegatedCspr: 6000, note: 'not in current era set', allowed: true }],
+      proposals: [{ id: 2, validator: '01AB', amountCspr: 6000, undelegate: true, txHash: '', resolved: false }],
+    } as any);
+    // recallableCspr() falls back to delegatedCspr until the staking view loads a currentStake of 0.
+    c.staking.set({ positions: [{ publicKey: '01ab', currentStakeCspr: 0, rewardsCspr: 0, status: '', name: null }] } as any);
+
+    const p = c.pendingProposals()[0];
+    expect(c.proposalValidatorActive(p)).toBe(false);                 // case-insensitive match, inactive → steer to Reject
+    expect(c.vanishedPositions().map(v => v.publicKey)).toContain('01ab');
+    expect(c.isVanished(c.state()!.validators[0])).toBe(true);
+    // a vanished validator must NOT be offered a doomed Recall (owner_undelegate reverts ValidatorNotFound)
+    expect(c.committedValidators().map(v => v.publicKey)).not.toContain('01ab');
+  });
+
+  it('offers neither Recall nor Clear for an inactive validator until the staking view confirms its stake', () => {
+    c.state.set({
+      validators: [{ publicKey: '01ab', feePercent: -1, active: false, compliant: false, delegatedCspr: 6000, note: 'not in current era set', allowed: true }],
+      proposals: [],
+    } as any);
+    c.staking.set(null); // /api/staking not loaded (e.g. rate-limited) → recoverability unknown
+    expect(c.committedValidators()).toEqual([]);        // no doomed Recall while unconfirmed
+    expect(c.vanishedPositions()).toEqual([]);          // no Clear until currentStake is confirmed 0
+    expect(c.isVanished(c.state()!.validators[0])).toBe(false);
+  });
+
+  it('proposalValidatorActive() is true for an active validator and null when it is not in the list', () => {
+    c.state.set({
+      validators: [{ publicKey: '01cc', feePercent: 1, active: true, compliant: true, delegatedCspr: 100, note: '', allowed: true }],
+      proposals: [{ id: 0, validator: '01cc', amountCspr: 10, undelegate: false, txHash: '', resolved: false }],
+    } as any);
+    expect(c.proposalValidatorActive(c.pendingProposals()[0])).toBe(true);
+    expect(c.proposalValidatorActive({ id: 9, validator: 'deadbeef', amountCspr: 1, undelegate: true, txHash: '', resolved: false } as any)).toBeNull();
+  });
+
   it('coSignBlocked() flags loading, wrong account, and an unavailable SDK', () => {
     c.config.set({ ownerPublicKey: '01AA' } as any);
     expect(c.coSignBlocked()).toContain('loading'); // idle/loading SDK → explain, don't mislead

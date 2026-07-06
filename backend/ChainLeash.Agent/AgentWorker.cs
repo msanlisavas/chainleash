@@ -33,6 +33,8 @@ public sealed class AgentWorker : BackgroundService
     private string? _lastTickError; // edge-trigger the tick-error HOLD so an outage doesn't flood the feed
     private string? _lastIdleHold;  // de-dupe the idle "nothing off-policy" HOLD so steady-state doesn't bury the real story (the live heartbeat shows the agent is still watching)
     private DateTime _lastIdleHoldAt; // …but re-print the idle status at least this often so a de-duped feed never LOOKS frozen for days
+    private string? _lastVanishedNotice; // de-dupe the "validator left the era set with stale committed" advisory
+    private DateTime _lastVanishedAt;
     private static readonly TimeSpan IdleHoldRefresh = TimeSpan.FromMinutes(30);
     private const int GasCheckEveryNTicks = 6; // agent gas changes only on spend → refresh ~hourly at 600s, not every tick
 
@@ -147,6 +149,24 @@ public sealed class AgentWorker : BackgroundService
             return;
         }
         if (assessments.Count == 0) { await Emit("HOLD", "No allowlisted validators configured."); return; }
+
+        // Validators that LEFT the era set but still carry directed `committed` stake. The agent
+        // can't exit these (the bid may be gone → undelegate reverts), so it surfaces them for the
+        // owner to reconcile: Recall (if merely evicted) or Clear stale committed (if the bid is gone).
+        var vanished = assessments
+            .Where(a => !StakingPolicy.CanAgentAutoExit(a.IsActive) && committed.GetValueOrDefault(a.PublicKey) > 0)
+            .ToList();
+        if (vanished.Count > 0)
+        {
+            var summary = string.Join("; ", vanished.Select(a => $"{a.PublicKey[..10]}… {committed.GetValueOrDefault(a.PublicKey):N0} CSPR"));
+            var msg = $"{vanished.Count} validator(s) left the era set with directed stake ({summary}). The agent can't exit these — the bid may be gone. Owner: Recall if merely evicted, or Clear stale committed if it left the auction.";
+            if (msg != _lastVanishedNotice || DateTime.UtcNow - _lastVanishedAt > IdleHoldRefresh)
+            {
+                _lastVanishedNotice = msg; _lastVanishedAt = DateTime.UtcNow;
+                await Emit("HOLD", msg);
+            }
+        }
+
         if (_tick < _backoffUntilTick)
         {
             _log.LogInformation("tick {T}: backing off after {N} failed action(s) until tick {U}", _tick, _failStreak, _backoffUntilTick);
@@ -163,7 +183,10 @@ public sealed class AgentWorker : BackgroundService
         var pendingProposalValidators = new HashSet<string>(
             _feed.State.Proposals.Where(p => !p.Resolved).Select(p => p.Validator),
             StringComparer.OrdinalIgnoreCase);
-        var breach = assessments.FirstOrDefault(a => !a.Compliant
+        // Only auto-exit a validator whose bid still exists (active). A non-compliant INACTIVE
+        // validator may have withdrawn its bid — any undelegate/redelegate reverts ValidatorNotFound
+        // (2026-07 incident), so the agent hands it to the owner instead of escalating a doomed exit.
+        var breach = assessments.FirstOrDefault(a => !a.Compliant && StakingPolicy.CanAgentAutoExit(a.IsActive)
             && committed.GetValueOrDefault(a.PublicKey) > 0
             && !pendingProposalValidators.Contains(a.PublicKey));
         var minDelegation = _cfg.GetValue("Staking:MinDelegationCspr", 500m);

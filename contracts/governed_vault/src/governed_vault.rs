@@ -164,6 +164,11 @@ pub struct BondReturned {
     pub to: Address,
     pub amount: U512,
 }
+#[odra::event]
+pub struct CommittedCleared {
+    pub validator: PublicKey,
+    pub cleared: U512, // the phantom amount that was zeroed (for audit)
+}
 
 #[odra::module]
 pub struct GovernedVault {
@@ -524,6 +529,20 @@ impl GovernedVault {
         self.sub_committed(&validator, amount);
         self.add_committed(&new_validator, amount);
         self.env().emit_event(Redelegated { from: validator, to: new_validator, amount });
+    }
+
+    /// Owner reconciliation for a validator that has LEFT THE AUCTION (withdrew its bid). When a
+    /// validator fully unbonds, Casper force-returns the vault's delegation to the purse, but the
+    /// contract's `committed` ledger still shows the old directed stake — a phantom position that
+    /// can't be undelegated (the auction has no bid → ValidatorNotFound). This corrects that ledger
+    /// to zero WITHOUT any auction call; it moves NO CSPR (the funds already left the dead validator),
+    /// it only fixes the vault's own directed-stake accounting. Not gated on `paused` so the owner can
+    /// reconcile mid-incident.
+    pub fn owner_clear_committed(&mut self, validator: PublicKey) {
+        self.assert_owner();
+        let cleared = self.committed.get_or_default(&validator);
+        self.committed.set(&validator, U512::zero());
+        self.env().emit_event(CommittedCleared { validator, cleared });
     }
 
     // ---- views ----
@@ -1213,5 +1232,45 @@ mod tests {
         env.set_caller(owner);
         vault.approve_material(id); // owner-reviewed → executes
         assert_eq!(vault.committed_to(v1), u(0));
+    }
+
+    #[test]
+    fn owner_clears_stale_committed_and_emits() {
+        // A validator withdrew its bid → its `committed` is phantom (can't be undelegated; the
+        // auction reverts ValidatorNotFound). The owner reconciles the ledger with no auction call.
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500
+        assert_eq!(vault.committed_to(v1.clone()), u(500));
+        env.set_caller(owner);
+        vault.owner_clear_committed(v1.clone());
+        assert_eq!(vault.committed_to(v1), u(0)); // phantom cleared, no funds moved
+    }
+
+    #[test]
+    fn owner_clear_committed_by_non_owner_reverts() {
+        let (env, mut vault, agent, _o, v1, _v2) = setup();
+        env.set_caller(agent);
+        assert_eq!(vault.try_owner_clear_committed(v1), Err(Error::NotOwner.into()));
+    }
+
+    #[test]
+    fn owner_clear_committed_works_while_paused() {
+        // Reconciliation must be possible mid-incident (the kill-switch is engaged).
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500));
+        env.set_caller(owner);
+        vault.set_paused(true);
+        vault.owner_clear_committed(v1.clone());
+        assert_eq!(vault.committed_to(v1), u(0));
+    }
+
+    #[test]
+    fn owner_clear_committed_is_idempotent_on_zero() {
+        let (env, mut vault, _a, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.owner_clear_committed(v2.clone()); // never committed → no-op, still succeeds
+        assert_eq!(vault.committed_to(v2), u(0));
     }
 }

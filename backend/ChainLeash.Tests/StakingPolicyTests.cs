@@ -75,4 +75,25 @@ public class StakingPolicyTests
     public void BondWouldStick_guards_new_positions_at_the_network_minimum(
         decimal amount, decimal existingPosition, decimal minDelegation, bool expected) =>
         Assert.Equal(expected, StakingPolicy.BondWouldStick(amount, existingPosition, minDelegation));
+
+    [Fact]
+    public void CanAgentAutoExit_only_for_active_validators()
+    {
+        Assert.True(StakingPolicy.CanAgentAutoExit(true));
+        Assert.False(StakingPolicy.CanAgentAutoExit(false)); // inactive → hand to owner, never auto-escalate a doomed exit
+    }
+
+    [Theory]
+    // an unresolved exit proposal targets this validator: active vs left-the-auction
+    [InlineData(true, true, 6000, 0, 500, "Exit proposed — awaiting owner co-sign")]
+    [InlineData(true, false, 6000, 0, 500, "Exit proposed, but validator left the auction — reject it (can't co-sign)")]
+    // directed principal but no current on-chain stake
+    [InlineData(false, false, 6000, 0, 500, "Validator left the auction — clear stale committed")]
+    [InlineData(false, true, 400, 0, 500, "Unbonded — below the network minimum; needs owner action")]
+    [InlineData(false, true, 6000, 0, 500, "Settling (~7 eras)")]
+    // other states
+    [InlineData(false, true, 0, 500, 500, "Unbonding")]
+    [InlineData(false, true, 6000, 6000, 500, "Delegated")]
+    public void PositionStatus_maps_states(bool exiting, bool active, decimal principal, decimal current, decimal min, string expected) =>
+        Assert.Equal(expected, StakingPolicy.PositionStatus(exiting, active, principal, current, min));
 }

@@ -79,19 +79,12 @@ public sealed class StakingService
             catch { stale = true; current = principal; } // CSPR.cloud hiccup → fall back to principal, flag stale
             if (current <= 0m && principal <= 0m) continue; // skip allowlisted-but-unused validators
             var reward = RewardMath.RewardCspr(current, principal);
-            var status =
-                exiting.Contains(a.PublicKey) ? "Exit proposed — awaiting owner co-sign"
-                : principal > 0m && current <= 0m
-                    // Directed but no active delegation. If the directed principal is at/below the network
-                    // minimum, a NEW delegation there can never bond (DelegationAmountTooSmall) — so this
-                    // isn't "settling", it's a stranded/phantom position that needs owner reconciliation.
-                    // Above the minimum it's a redelegation/new delegation still moving through Casper's
-                    // ~7-era unbonding queue (stake left the source, not yet bonded).
-                    ? (principal <= _minDelegation
-                        ? "Unbonded — below the network minimum; needs owner action"
-                        : "Settling (~7 eras)")
-                : principal <= 0m && current > 0m ? "Unbonding"
-                : "Delegated";
+            // Pure status mapping (unit-tested in StakingPolicy). Handles the "validator left the
+            // auction" cases distinctly: an exit proposal on a departed validator can't be co-signed
+            // (undelegate reverts), and a directed-but-current-0 position on an inactive validator is
+            // phantom committed to clear — NOT "Settling (~7 eras)".
+            var status = StakingPolicy.PositionStatus(
+                exiting.Contains(a.PublicKey), a.IsActive, principal, current, _minDelegation);
             positions.Add(new PositionView(a.PublicKey, a.FeePercent, a.IsActive, a.Compliant,
                 principal, current, reward, status, a.Name));
         }

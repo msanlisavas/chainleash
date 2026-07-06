@@ -227,12 +227,36 @@ ongoing task is **agent gas**: `/health` flags `lowGas`; top up from the
   dashboard shows a red banner and every agent move is rejected on-chain (`Paused`) until
   the owner unpauses.
 
+## Reconcile a validator that left the auction
+
+A validator the vault delegated to can **withdraw its bid** and leave the auction. Casper
+force-returns the vault's delegation, but the contract's `committed` ledger keeps the old amount
+(**phantom**), and every exit path (`approve_material` undelegate, `owner_undelegate`,
+`owner_redelegate`) reverts **`ValidatorNotFound`** because they all call the auction. The
+dashboard flags this — the staking view shows *"Validator left the auction — clear stale
+committed"*, and the co-sign button on any exit proposal for that validator is disabled with a
+warning. To reconcile (all owner-signed):
+
+1. **Stop agent** (dashboard) or `vault-pause <pkg> true` — stops the agent re-escalating the
+   doomed exit while you clean up.
+2. **Reject** any pending exit proposal for the departed validator — dashboard *Reject
+   (resolve without executing)*, or `vault-reject <pkg> <id>`. (Approving would revert
+   `ValidatorNotFound`.)
+3. **Clear stale committed** — dashboard *Clear stale committed* under "Reconcile stale
+   committed", or `vault-clear-committed <pkg> <validatorHex>`. This zeroes the phantom ledger
+   with **no auction call and no fund movement** (the funds already returned to the vault).
+4. **Resume agent** (dashboard) or `vault-pause <pkg> false`.
+
+The agent no longer auto-escalates exits for inactive validators — it emits a HOLD advisory and
+leaves the recall/clear decision to the owner (a recall works if the validator was merely evicted;
+clear is for a validator that fully left the auction).
+
 ## 5. Tests
 
 ```bash
-dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (86)
-cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (12, headless)
-# contract suite (43) runs in the chainleash-odra container — see section 1
+dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (107)
+cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (15, headless)
+# contract suite (47) runs in the chainleash-odra container — see section 1
 ```
 
 CI (`.github/workflows/ci.yml`) runs the backend, frontend, and contract suites on every push/PR.

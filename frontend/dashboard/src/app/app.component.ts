@@ -301,9 +301,14 @@ export class AppComponent implements OnInit, OnDestroy {
     return this.positionStatus(v).includes('needs owner action');
   }
 
-  /** Validators the owner can actually recall NOW (a real on-chain delegation exists). */
+  /** Validators the owner can actually recall NOW (a real on-chain delegation exists). An ACTIVE
+   *  validator uses its directed stake; an INACTIVE one is offered a recall ONLY with confirmed
+   *  current on-chain stake (evicted but bid intact). A validator that left the auction — or one
+   *  whose current stake isn't confirmed yet (staking view still loading) — is reconciled with
+   *  Clear stale committed, never a doomed Recall that would revert ValidatorNotFound. */
   committedValidators(): ValidatorView[] {
-    return (this.state()?.validators ?? []).filter(v => this.recallableCspr(v) > 0);
+    return (this.state()?.validators ?? [])
+      .filter(v => v.active ? this.recallableCspr(v) > 0 : (this.actualStake(v) ?? 0) > 0);
   }
 
   /** True while any owner action OR co-sign is mid-flight — serialize wallet use. */
@@ -343,6 +348,34 @@ export class AppComponent implements OnInit, OnDestroy {
     this.ownerAction('withdraw', { amountCspr: this.state()?.freeBalanceCspr ?? 0 }, 'Withdraw to wallet');
   }
   rejectProposal(p: ProposalView): void { this.ownerAction('reject', { id: p.id }, `Reject #${p.id}`); }
+
+  /** Is the validator this proposal targets still active in the auction? null = not in the list.
+   *  When it has left the auction, co-signing the (undelegate) proposal reverts on-chain
+   *  (ValidatorNotFound), so the UI steers the owner to Reject instead of Co-sign. */
+  proposalValidatorActive(p: ProposalView): boolean | null {
+    const v = (this.state()?.validators ?? []).find(x => x.publicKey.toLowerCase() === p.validator.toLowerCase());
+    return v ? v.active : null;
+  }
+
+  /** A directed position on a validator that has LEFT the auction with its stake already gone
+   *  (inactive + confirmed current on-chain stake 0) — reconcile with Clear stale committed; a
+   *  recall would revert on-chain (ValidatorNotFound). Requires the staking view (currentStake) to
+   *  be loaded, so an evicted-but-recoverable validator is never mislabeled as vanished. */
+  isVanished(v: ValidatorView): boolean {
+    return !v.active && v.delegatedCspr > 0 && this.actualStake(v) === 0;
+  }
+
+  /** Positions on validators that LEFT the auction but still carry phantom `committed` — the
+   *  owner reconciles these with Clear stale committed (recall can't work: the bid is gone). */
+  vanishedPositions(): ValidatorView[] {
+    return (this.state()?.validators ?? []).filter(v => this.isVanished(v));
+  }
+
+  clearLabel(v: ValidatorView): string { return `Clear ${this.short(v.publicKey)}`; }
+  /** Zero a validator's phantom committed on-chain (owner_clear_committed) — moves no CSPR. */
+  clearStaleCommitted(v: ValidatorView): void {
+    this.ownerAction('clearcommitted', { validator: v.publicKey }, this.clearLabel(v));
+  }
 
   // --- Owner POLICY controls (wallet-signed, owner-gated on-chain). The agent reads each from
   //     chain, so the change takes effect on its next tick. ---

@@ -43,4 +43,31 @@ public static class StakingPolicy
     /// Exiting a breaching validator must be escalated to a co-signed proposal when the
     /// position to unwind exceeds the per-action cap (can't be done in one routine tx).
     public static bool MustEscalateExit(decimal position, decimal cap) => position > cap;
+
+    /// The agent may auto-exit a breaching validator only if its bid still exists in the auction.
+    /// An inactive validator may have WITHDRAWN its bid, so any undelegate/redelegate reverts
+    /// ValidatorNotFound — those are handed to the owner (recall / clear-committed), never auto-escalated.
+    public static bool CanAgentAutoExit(bool validatorActive) => validatorActive;
+
+    /// The dashboard status for one directed position. `exiting` = an unresolved owner-exit proposal
+    /// targets this validator; `validatorActive` = it is still in the era set. A validator that has
+    /// LEFT the auction can neither be co-signed (undelegate reverts) nor is it "settling" — label
+    /// those honestly and point the owner at reject / clear-committed.
+    public static string PositionStatus(bool exiting, bool validatorActive, decimal principal, decimal current, decimal minDelegation)
+    {
+        if (exiting)
+            return validatorActive
+                ? "Exit proposed — awaiting owner co-sign"
+                : "Exit proposed, but validator left the auction — reject it (can't co-sign)";
+        if (principal > 0m && current <= 0m)
+        {
+            if (!validatorActive)
+                return "Validator left the auction — clear stale committed";
+            return principal <= minDelegation
+                ? "Unbonded — below the network minimum; needs owner action"
+                : "Settling (~7 eras)";
+        }
+        if (principal <= 0m && current > 0m) return "Unbonding";
+        return "Delegated";
+    }
 }

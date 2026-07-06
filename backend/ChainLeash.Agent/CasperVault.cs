@@ -204,6 +204,12 @@ public sealed class CasperVault
         BuildUnsignedOwnerTxJson("reject_material",
             new List<NamedArg> { new NamedArg("id", CLValue.U32(id)) }, 5_000_000_000UL);
 
+    /// Owner reconciles STALE `committed` for a validator that left the auction (withdrew its bid).
+    /// Zeroes the phantom directed stake with no auction call — moves NO CSPR, just fixes the ledger.
+    public string PrepareClearCommitted(PublicKey validator) =>
+        BuildUnsignedOwnerTxJson("owner_clear_committed",
+            new List<NamedArg> { new NamedArg("validator", CLValue.PublicKey(validator)) }, 5_000_000_000UL);
+
     // --- Owner POLICY controls (pure-state owner calls, ~5 CSPR each). The agent reads each of
     // these straight from chain, so a wallet-signed change takes effect on the next tick. ---
 

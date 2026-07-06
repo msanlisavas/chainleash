@@ -62,6 +62,7 @@ try
         case "vault-propose": await VaultPropose(); break;
         case "vault-approve": await VaultApprove(); break;
         case "vault-reject": await VaultReject(); break;
+        case "vault-clear-committed": await VaultClearCommitted(); break;
         case "cosign-prepare": await CosignPrepare(); break;
         case "fund": await Fund(); break;
         case "setup-keys": await SetupKeys(); break;
@@ -1048,6 +1049,29 @@ async Task VaultReject()
     await Submit(Rpc(cfg), tx, $"Owner REJECTS material proposal #{id} → resolved without executing");
 }
 
+// Owner (human key) reconciles STALE `committed` for a validator that left the auction (withdrew
+// its bid) — zeroes the phantom directed stake with no auction call, moves no CSPR.
+// usage: vault-clear-committed <package-hash> <validatorHex>
+async Task VaultClearCommitted()
+{
+    var cfg = Config();
+    if (args.Length < 3) { Console.WriteLine("usage: vault-clear-committed <package-hash> <validatorHex>"); return; }
+    var pkg = args[1].Replace("hash-", "");
+    var validator = PublicKey.FromHexString(args[2]);
+    var humanKp = KeyPair.FromPem(cfg["HumanSecretKeyPath"]!);
+
+    var tx = new Transaction.ContractCallBuilder()
+        .ByPackageHash(pkg, null, null)
+        .EntryPoint("owner_clear_committed")
+        .RuntimeArgs(new List<NamedArg> { new NamedArg("validator", CLValue.PublicKey(validator)) })
+        .From(humanKp.PublicKey)
+        .ChainName(cfg["ChainName"]!)
+        .Payment(5_000_000_000UL, 1) // ledger correction only — no auction interaction
+        .Build();
+    tx.Sign(humanKp);
+    await Submit(Rpc(cfg), tx, $"Owner CLEARS stale committed for {args[2][..12]}… → phantom directed stake zeroed");
+}
+
 // Build the UNSIGNED approve_material(id) tx for the owner to sign in their OWN browser
 // wallet (CSPR.click / Casper Wallet) — printed wallet-shaped, nothing signed or submitted.
 // usage: cosign-prepare <package-hash> <id> [ownerPubkeyHex]
@@ -1169,6 +1193,7 @@ void Help()
     Line("vault-set-validator <package-hash> <validatorHex> [true|false]", "Allowlist (or de-list) a validator");
     Line("vault-approve <package-hash> <id>", "Co-sign a pending material proposal → executes on-chain");
     Line("vault-reject <package-hash> <id>", "Reject a pending material proposal WITHOUT executing it");
+    Line("vault-clear-committed <package-hash> <validatorHex>", "Zero stale committed for a validator that left the auction (no funds move)");
     Line("vault-slash <pkg> <motes> <reason>", "Slash (forfeit) part of the agent's bond on a violation");
     Line("vault-return-bond <pkg>", "Return the remaining bond to the operator");
     Line("vault-pause <package-hash> <true|false>", "Kill-switch — pause/unpause all agent moves");
