@@ -54,11 +54,15 @@ public sealed class AgentWorker : BackgroundService
         var bondTarget = _cfg.GetValue("Staking:BondCspr", 0m);
 
         _feed.State.PackageHash = (_cfg["Casper:GovernedVaultPackageHash"] ?? "").Replace("hash-", "");
-        _feed.State.MaxCommissionPercent = _validators.MaxCommissionPercent;
+        // Report the EFFECTIVE threshold (owner's wallet-set value if any, else config) — the same
+        // value the agent actually enforces and RefreshState streams — not the raw config default,
+        // so the startup banner can't contradict the live "now ≤ N%" the owner set on-chain.
+        var effectiveMaxCommission = _validators.EffectiveMaxCommission();
+        _feed.State.MaxCommissionPercent = effectiveMaxCommission;
 
         _log.LogInformation("CHAINLEASH staking agent online — chunk={Chunk} CSPR, tick={S}s, policy: commission ≤ {Max}%",
-            chunk, period.TotalSeconds, _validators.MaxCommissionPercent);
-        await Emit("ONLINE", $"Agent online — reading vault state from chain; policy: commission ≤ {_validators.MaxCommissionPercent}%.");
+            chunk, period.TotalSeconds, effectiveMaxCommission);
+        await Emit("ONLINE", $"Agent online — reading vault state from chain; policy: commission ≤ {effectiveMaxCommission}%.");
 
         if (_vault.ReadOnly)
             await Emit("HOLD", "Observer mode — no agent key configured. Reading the live vault read-only; the agent signs nothing. Add an agent key (see RUNBOOK) and point at your own vault to enable on-chain moves.");
