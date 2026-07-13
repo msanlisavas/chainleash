@@ -34,6 +34,9 @@ export class WalletService {
 
   private cfg: AppConfig | null = null;
   private connectAborted = false;
+  /** When a waitForKey() poll is sleeping, this wakes it the instant an account
+   *  event lands (see wireEvents → notifySettle) so the UI settles without poll lag. */
+  private settleSignal: (() => void) | null = null;
 
   private get sdk(): any { return (window as any).csprclick; }
 
@@ -79,16 +82,13 @@ export class WalletService {
     if (this.status() !== 'ready') return null;
     this.connectAborted = false;
     this.sdk.signIn();
-    // signed_in fires via wireEvents(); also poll briefly as a fallback.
-    for (let i = 0; i < 60 && !this.activeKey() && !this.connectAborted; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      this.refreshActiveKey();
-    }
-    return this.activeKey();
+    // signIn() returns immediately (per CSPR.click); the signed_in event drives
+    // activeKey and this poll is the fallback. Wait until an account is active.
+    return this.waitForKey(k => !!k);
   }
 
-  /** Abort a pending connect() wait (the user closed/ignored the sign-in modal). */
-  cancelConnect(): void { this.connectAborted = true; }
+  /** Abort a pending connect()/switchAccount() wait (the user closed/ignored the modal). */
+  cancelConnect(): void { this.connectAborted = true; this.notifySettle(); }
 
   /** True when the last connect() wait ended because the user cancelled it. */
   wasConnectCancelled(): boolean { return this.connectAborted; }
@@ -105,14 +105,45 @@ export class WalletService {
    */
   async switchAccount(): Promise<string | null> {
     if (this.status() !== 'ready') return this.activeKey();
+    this.connectAborted = false;
+    const previous = this.activeKey();
     if (typeof this.sdk?.switchAccount === 'function') {
-      try { await this.sdk.switchAccount(); } catch { /* user cancelled the picker */ }
-      this.refreshActiveKey(); // the switched_account event also updates this
-      return this.activeKey();
+      try { this.sdk.switchAccount(); } catch { /* SDK rejected the request */ }
+      // switchAccount() ALSO returns immediately — reading getActiveAccount() now
+      // would return the stale, pre-switch account (the reported bug). The
+      // switched_account/signed_in events drive activeKey; wait until it actually
+      // changes so the app adopts (logs in) whatever account the user selected.
+      return this.waitForKey(k => !!k && k !== previous);
     }
     await this.disconnect();
     return this.connect();
   }
+
+  /**
+   * Wait until getActiveAccount() satisfies `settled`, the user cancels, or the ~30s
+   * budget elapses. Both signIn() and switchAccount() return BEFORE the user has chosen,
+   * so we can't read state synchronously. The signed_in/switched_account events are the
+   * REAL adoption path (wireEvents) — they update activeKey even after this returns — and
+   * they also wake this loop instantly via notifySettle(); the 500ms poll is the fallback.
+   * CSPR.click emits no "picker closed/cancelled" event, so a cancelled or same-account
+   * pick can't settle the predicate — the caller shows a Cancel control for that path.
+   */
+  private async waitForKey(settled: (k: string | null) => boolean): Promise<string | null> {
+    for (let i = 0; i < 60 && !this.connectAborted; i++) {
+      this.refreshActiveKey();
+      if (settled(this.activeKey())) break;
+      await new Promise<void>(resolve => {
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = () => { clearTimeout(timer); if (this.settleSignal === finish) this.settleSignal = null; resolve(); };
+        timer = setTimeout(finish, 500);
+        this.settleSignal = finish; // an account event fires finish() early (no 500ms lag)
+      });
+    }
+    return this.activeKey();
+  }
+
+  /** Wake an in-flight waitForKey() poll — an account event just updated activeKey. */
+  private notifySettle(): void { const s = this.settleSignal; this.settleSignal = null; s?.(); }
 
   /**
    * Sign + send a prepared, unsigned TransactionV1 JSON via the active wallet.
@@ -161,11 +192,14 @@ export class WalletService {
   }
 
   private wireEvents(): void {
-    this.sdk.on?.('csprclick:signed_in', (evt: any) => this.activeKey.set(evt?.account?.public_key ?? null));
-    this.sdk.on?.('csprclick:switched_account', (evt: any) => this.activeKey.set(evt?.account?.public_key ?? null));
+    // Every handler nudges notifySettle() so an in-flight connect()/switchAccount() wait
+    // resolves the instant the account settles (rather than on the next 500ms poll tick).
+    const adopt = (evt: any) => { this.activeKey.set(evt?.account?.public_key ?? null); this.notifySettle(); };
+    this.sdk.on?.('csprclick:signed_in', adopt);
+    this.sdk.on?.('csprclick:switched_account', adopt);
     // fired when the user switches the active account inside the wallet extension itself
-    this.sdk.on?.('csprclick:unsolicited_account_change', () => this.refreshActiveKey());
-    this.sdk.on?.('csprclick:signed_out', () => this.activeKey.set(null));
-    this.sdk.on?.('csprclick:disconnected', () => this.activeKey.set(null));
+    this.sdk.on?.('csprclick:unsolicited_account_change', () => { this.refreshActiveKey(); this.notifySettle(); });
+    this.sdk.on?.('csprclick:signed_out', () => { this.activeKey.set(null); this.notifySettle(); });
+    this.sdk.on?.('csprclick:disconnected', () => { this.activeKey.set(null); this.notifySettle(); });
   }
 }

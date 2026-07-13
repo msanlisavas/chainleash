@@ -311,8 +311,10 @@ export class AppComponent implements OnInit, OnDestroy {
       .filter(v => v.active ? this.recallableCspr(v) > 0 : (this.actualStake(v) ?? 0) > 0);
   }
 
-  /** True while any owner action OR co-sign is mid-flight — serialize wallet use. */
-  walletBusy(): boolean { return this.ownerBusy() !== null || this.coSigning() !== null; }
+  /** True while any owner action, co-sign, OR wallet connect/switch is mid-flight —
+   *  serialize wallet use (e.g. don't let co-sign kick off a second signIn() while a
+   *  standalone connect is already polling). */
+  walletBusy(): boolean { return this.ownerBusy() !== null || this.coSigning() !== null || this.walletConnecting(); }
 
   /**
    * Run an owner-direct action: server builds the UNSIGNED owner tx → owner signs it in their

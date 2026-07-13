@@ -156,6 +156,41 @@
   .pill-warn { color: var(--color-amber);   border-color: rgba(241, 196, 15, 0.4);  background: rgba(241, 196, 15, 0.1); }
 }
 
+/* CSPR.click wallet modal ------------------------------------------------- */
+/* The CSPR.click UI SDK renders its wallet dialogs (provider picker, the
+   "Connecting as … / Sign in / Switch account / Cancel" confirmation, the
+   unsolicited-account-change confirm, and the tx-signing prompt) as a
+   `react-modal`, portaled to <body> — OUTSIDE Angular's tree, so only global
+   CSS reaches it. CSPR.click positions the dialog with inline styles
+   (`top:50%; transform:translate(-50%,-50%)`) and NO max-height, so a dialog
+   taller than the viewport is clipped top AND bottom: the Sign in / Switch
+   account buttons drop below the fold on short/laptop windows (the reported
+   bug). It also sets z-index:17 inline, which loses to our sticky nav (z-50),
+   so the dialog's top slid under the header.
+
+   Fix: turn the full-screen overlay into a flex centering box and cap the
+   dialog to the viewport with internal scroll, so it's always centered and
+   every control stays reachable at any height. `!important` is required to
+   beat react-modal's inline styles. These generic react-modal class names are
+   only ever emitted by CSPR.click here (the dashboard is Angular, not React). */
+.ReactModal__Overlay {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 16px !important;
+  z-index: 1000 !important; /* above the sticky nav (z-50) — a wallet modal is topmost */
+}
+.ReactModal__Content {
+  position: relative !important;
+  inset: auto !important;
+  top: auto !important; right: auto !important; bottom: auto !important; left: auto !important;
+  transform: none !important;
+  margin: 0 !important;
+  max-height: 100% !important; /* 100% of the padded overlay = viewport − 32px */
+  max-width: 100% !important;  /* natural width on desktop; shrinks to fit on mobile */
+  overflow-y: auto !important; /* tall dialogs scroll inside instead of clipping */
+}
+
 /* Motion (every animation is gated on prefers-reduced-motion) ------------- */
 @keyframes cl-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @keyframes cl-pulse-ring {
