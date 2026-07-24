@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@angular-devkit/build-angular": "^20.3.28",
-    "@angular/cli": "^20.3.28",
+    "@angular/cli": "^21.0.4",
     "@angular/compiler-cli": "^20.3.25",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/ibm-plex-sans": "^5.2.8",
