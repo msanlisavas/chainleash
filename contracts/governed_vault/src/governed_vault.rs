@@ -1273,4 +1273,128 @@ mod tests {
         vault.owner_clear_committed(v2.clone()); // never committed → no-op, still succeeds
         assert_eq!(vault.committed_to(v2), u(0));
     }
+
+    #[test]
+    fn initialize_twice_reverts() {
+        let (env, mut vault, agent, owner, _v1, _v2) = setup(); // setup() already initialized
+        env.set_caller(owner); // owner IS the installer — even it cannot configure twice
+        assert_eq!(vault.try_initialize(agent, owner, u(2000)), Err(Error::AlreadyInitialized.into()));
+        assert_eq!(vault.value_cap(), u(1000)); // original configuration untouched
+    }
+
+    #[test]
+    fn owner_can_reject_material_while_paused() {
+        // Claimed in the READMEs but previously untested: reject_material deliberately has
+        // no pause gate, so the owner can clear a bad agent queue mid-incident.
+        let (env, mut vault, agent, owner, _v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        let id = vault.propose_material(v2.clone(), u(5000), false);
+        env.set_caller(owner);
+        vault.set_paused(true);
+        let balance_before = vault.total_balance();
+        vault.reject_material(id); // succeeds while the kill-switch is engaged
+        assert!(vault.get_proposal(id).unwrap().resolved);
+        assert_eq!(vault.delegated_to(v2), u(0)); // never executed
+        assert_eq!(vault.total_balance(), balance_before); // no funds moved
+        assert!(env.emitted_event(&vault, MaterialRejected { id }));
+    }
+
+    #[test]
+    fn kill_switch_blocks_undelegate_and_redelegate() {
+        // Only delegate was previously pinned as Paused-gated; the agent's other two
+        // moves must freeze under the kill-switch as well.
+        let (env, mut vault, agent, owner, v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500)); // committed[v1] = 500, so only Paused can trip below
+        env.set_caller(owner);
+        vault.set_paused(true);
+        env.set_caller(agent);
+        assert_eq!(vault.try_undelegate(v1.clone(), u(100)), Err(Error::Paused.into()));
+        assert_eq!(vault.try_redelegate(v1, v2, u(100)), Err(Error::Paused.into()));
+    }
+
+    #[test]
+    fn cooldown_rate_limits_undelegate_and_redelegate() {
+        // Only delegate was previously pinned as rate-limited; the cooldown must throttle
+        // every agent move, or a hijacked agent could churn stake via the other two.
+        let (env, mut vault, agent, owner, v1, v2) = setup();
+        env.set_caller(owner);
+        vault.set_validator(v2.clone(), true);
+        vault.set_action_interval(5_000);
+        env.advance_block_time(10_000);
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(300)); // first move ok — starts the cooldown
+        assert_eq!(vault.try_undelegate(v1.clone(), u(100)), Err(Error::RateLimited.into()));
+        assert_eq!(vault.try_redelegate(v1.clone(), v2.clone(), u(100)), Err(Error::RateLimited.into()));
+        env.advance_block_time(5_000);
+        vault.undelegate(v1.clone(), u(100)); // cooldown elapsed → ok (and restarts it)
+        assert_eq!(vault.try_redelegate(v1.clone(), v2.clone(), u(100)), Err(Error::RateLimited.into()));
+        env.advance_block_time(5_000);
+        vault.redelegate(v1, v2, u(100)); // ok once its own cooldown elapsed
+    }
+
+    #[test]
+    fn owner_redelegate_moves_committed_between_validators() {
+        // Owner-discretion path: NOT allowlist-bound (v2 is unapproved) and NOT bound by
+        // the agent's per-action cap (1500 > the 1000 cap). The directed-stake ledger
+        // moves source → destination in full.
+        let (env, mut vault, agent, owner, v1, v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(800));
+        vault.delegate(v1.clone(), u(700)); // committed[v1] = 1500
+        env.set_caller(owner);
+        vault.owner_redelegate(v1.clone(), v2.clone(), u(1500));
+        assert_eq!(vault.committed_to(v1), u(0));
+        assert_eq!(vault.committed_to(v2), u(1500));
+    }
+
+    #[test]
+    fn slash_bond_with_no_bond_still_records_violation() {
+        // Current contract behavior: with a zero bond the slash saturates to 0 and no CSPR
+        // moves, but the violation counter STILL increments — slash_bond doubles as an
+        // on-chain violation record even when there is nothing left to forfeit.
+        let (env, mut vault, _a, owner, _v1, _v2) = setup(); // no bond was ever posted
+        env.set_caller(owner);
+        let balance_before = vault.total_balance();
+        vault.slash_bond(u(100), String::from("violation with empty bond"));
+        assert_eq!(vault.bond(), u(0));
+        assert_eq!(vault.violations(), 1);
+        assert_eq!(vault.total_balance(), balance_before); // nothing was transferred out
+    }
+
+    #[test]
+    fn deposit_treasury_emits_funded() {
+        let (env, mut vault, _a, owner, _v1, _v2) = setup();
+        env.set_caller(owner);
+        vault.with_tokens(u(123)).deposit_treasury();
+        assert!(env.emitted_event(&vault, Funded { from: owner, amount: u(123) }));
+    }
+
+    #[test]
+    fn owner_clear_committed_emits_cleared_amount() {
+        // The audit trail for reconciliation: the event carries the phantom amount zeroed.
+        let (env, mut vault, agent, owner, v1, _v2) = setup();
+        env.set_caller(agent);
+        vault.delegate(v1.clone(), u(500));
+        env.set_caller(owner);
+        vault.owner_clear_committed(v1.clone());
+        assert!(env.emitted_event(&vault, CommittedCleared { validator: v1, cleared: u(500) }));
+    }
+
+    #[test]
+    fn stranger_can_fund_the_treasury() {
+        // deposit_treasury is deliberately open — anyone may add CSPR to the vault, and
+        // there is no path back out except the owner's withdraw.
+        let (env, mut vault, _a, _o, _v1, _v2) = setup();
+        let stranger = env.get_account(2);
+        env.set_caller(stranger);
+        let balance_before = vault.total_balance();
+        vault.with_tokens(u(500)).deposit_treasury();
+        assert_eq!(vault.total_balance(), balance_before + u(500));
+        assert!(env.emitted_event(&vault, Funded { from: stranger, amount: u(500) }));
+    }
 }
