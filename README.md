@@ -144,7 +144,9 @@ That deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms
 ## Proven on Casper 2.0 testnet
 
 The full leash runs end-to-end on testnet (package
-[`612b0776…0758e3`](https://testnet.cspr.live/contract-package/612b07767d7e8245a8a2d2dfd77e56e34776e7be7ecf81b95429b092a30758e3)).
+[`612b0776…0758e3`](https://testnet.cspr.live/contract-package/612b07767d7e8245a8a2d2dfd77e56e34776e7be7ecf81b95429b092a30758e3)
+— current contract **version 4**, deployed 2026-07-06 as an in-place upgrade with the
+vault's state and purse preserved; all guarantees below hold against it).
 Selected on-chain artifacts (click to verify):
 
 | What | Transaction |
@@ -158,6 +160,7 @@ Selected on-chain artifacts (click to verify):
 | Human owner **co-signs** → a material (over-cap, 700 CSPR) move executes | [`286bed61…`](https://testnet.cspr.live/transaction/286bed617d866bef1cd58ee95eff9a1341003ac19a0ea32f7d49e362d6fa0a69) |
 | Owner **slashes the agent's bond** on a violation (forfeited to owner — real economic teeth) | [`de19786a…`](https://testnet.cspr.live/transaction/de19786adb70a49abddbff3f1c8814285c35837577757b0c701a7db03f1513c1) |
 | Agent pays for the premium risk read over **x402** (real CSPR transfer) | [`cd85af4c…`](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
+| Contract **upgraded in place** to v4 (`owner_clear_committed` reconciliation) — state + purse preserved across versions | [`b69c73c2…`](https://testnet.cspr.live/deploy/b69c73c2b14cf0ece4d0e2147e48347b5bcd98f1db057657ad010dfc4c354262) |
 
 ### Adversarial security review
 
@@ -195,7 +198,8 @@ cd spike/ChainLeash.Spike && dotnet run -- keygen
 # 2) put your CSPR.cloud key in spike/.../Config/settings.local.json, then deploy + arm:
 ./scripts/onboard.sh --cap 600 --validators <validatorHex> --deposit 1000 --bond 300
 #    (Windows: ./scripts/onboard.ps1 -CapCspr 600 -Validators @('<validatorHex>') -DepositCspr 1000 -BondCspr 300)
-# 3) run the stack — it now points at YOUR vault
+# 3) run the stack — onboarding upserted VAULT_PKG/OWNER_PUBKEY into .env, so
+#    compose now points at YOUR vault (for the PAY beat also set the X402_* trio — see RUNBOOK)
 docker compose up --build
 ```
 
