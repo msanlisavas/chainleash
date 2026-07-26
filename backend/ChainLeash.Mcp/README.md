@@ -31,7 +31,7 @@ macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`):
   "mcpServers": {
     "chainleash": {
       "command": "dotnet",
-      "args": ["run", "--project", "C:/Users/Sanli/source/repos/msanlisavas/chainleash/backend/ChainLeash.Mcp"]
+      "args": ["run", "--project", "<absolute-path-to-repo>/backend/ChainLeash.Mcp"]
     }
   }
 }

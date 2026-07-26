@@ -24,6 +24,8 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
       <p class="mt-3 text-steel text-body leading-relaxed max-w-[62ch]">
         A walkthrough of the leash: the agent proposing real CSPR staking moves on testnet,
         Casper bounding every one on-chain, and a human co-signing the material ones.
+        <span class="text-mute">(Recorded in June — the wallet-signed owner console in the
+        live dashboard below shipped in the final round.)</span>
       </p>
 
       <div class="panel mt-8 overflow-hidden">
