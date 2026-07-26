@@ -21,6 +21,9 @@ services:
       - X402__PayToAccountHash=${X402_PAY_TO}
       - X402__ExpectedPayerAccountHash=${X402_EXPECTED_PAYER}
       - X402__PriceMotes=${X402_PRICE_MOTES:-2500000000}
+      # optional: LLM-powered paid risk read (rule floor enforced); empty = deterministic rules
+      - X402__AnthropicApiKey=${ANTHROPIC_API_KEY:-}
+      - X402__AnthropicModel=${ANTHROPIC_MODEL:-claude-opus-5}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:5080/ >/dev/null"]
       interval: 30s
