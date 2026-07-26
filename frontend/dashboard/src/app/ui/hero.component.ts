@@ -25,6 +25,7 @@ import { Component, computed, input } from '@angular/core';
         <div class="mt-8 flex flex-wrap gap-3">
           <a href="#console" class="btn btn-primary">Watch it live <span aria-hidden="true">↓</span></a>
           <a href="#how" class="btn btn-ghost">How the leash works</a>
+          <a href="#watch" class="btn btn-ghost"><span aria-hidden="true">▶</span> Walkthrough (3:24)</a>
         </div>
       </div>
 
