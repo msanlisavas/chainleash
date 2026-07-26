@@ -6,7 +6,9 @@ demo. Everything runs against **Casper 2.0 testnet**.
 ## Prerequisites
 
 - **.NET 10 SDK** (`dotnet --version` ≥ 10.0.300)
-- **Node 20+ and Angular CLI 20** (`ng version`) — for the dashboard
+- **Node 24 and Angular CLI 20** (`ng version`) — for the dashboard. The lockfile is
+  written by npm 11 (ships with Node 24); npm 10 on Node 20/22 rejects it with a bogus
+  "missing from lock file" error
 - **Docker** — runs the full stack, and the Odra/Rust contract toolchain (`casper-types`
   doesn't host-compile on Windows; we build it in a Linux container)
 - A **CSPR.cloud** access key (node RPC + REST) — the public testnet key works for dev
@@ -58,7 +60,7 @@ agent's payments.
 docker build -t chainleash-odra tools/odra-build
 docker run --rm -v "$PWD/contracts/governed_vault:/work" \
   -v chainleash-cargo-registry:/usr/local/cargo/registry chainleash-odra \
-  bash /work/deploy.sh        # cargo test (43/43) + cargo odra build -> wasm/GovernedVault.wasm
+  bash /work/deploy.sh        # cargo test (47/47) + cargo odra build -> wasm/GovernedVault.wasm
 ```
 
 ## 2. Deploy + arm your own vault — one command
@@ -255,7 +257,7 @@ clear is for a validator that fully left the auction).
 
 ```bash
 dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (107)
-cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (15, headless)
+cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (22, headless)
 # contract suite (47) runs in the chainleash-odra container — see section 1
 ```
 

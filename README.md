@@ -46,6 +46,20 @@ The agent's authority is bounded by the protocol and the contract, not by trust 
 
 Casper's deep, native economic primitive today is **staking / delegation**, so that is what the agent governs. A Casper 2.0 contract delegates from its own purse — the auction identifies the delegator by purse, not by public key — which makes the value cap and validator allowlist **fully chain-enforced** rather than advisory. As Casper ships more on-chain venues, the same leash extends to cover them.
 
+## The same leash, RWA-ready
+
+The leash is venue-agnostic: nothing in the guard chain is staking-specific. Every guarantee proven here on native staking maps one-to-one onto the treasuries Casper is courting for real-world assets:
+
+| Proven on staking (live today) | RWA treasury (same contract pattern) |
+|---|---|
+| Validator allowlist | Allowlist of approved RWA issuers / venues (tokenized T-bills, credit vaults) |
+| Per-action value cap | Per-rebalance notional cap |
+| Per-validator concentration cap | Per-issuer concentration cap |
+| Propose → approve human co-sign | Human sign-off on material reallocations |
+| Slashable bond · cooldown · kill-switch · owner-only withdraw | Identical |
+
+Staking is Casper's deep native on-chain venue today, so staking is the proof. As Casper's RWA venues come on-chain, the leash extends with a **venue adapter, not a redesign** — the same `GovernedVault` roles, proposals, bond, and audit trail governing a different asset.
+
 ## Why it's different
 
 Incumbents (Coinbase Agentic Wallets, AWS Bedrock AgentCore) enforce agent spend limits **off-chain inside an enclave** — the security of the money equals the security of the server. CHAINLEASH makes the limit a **protocol + contract** guarantee: cap, allowlist, and owner-only withdraw are all enforced on-chain.
@@ -116,7 +130,9 @@ CHAINLEASH has been hardened through four rounds of **adversarial security revie
 
 **Off-chain hardening:** the API locks CORS to the dashboard origin, serves strict security headers (CSP included), rate-limits the public endpoints in two lanes (cheap reads vs. chain-polling co-sign), makes the co-sign confirm single-use and fail-closed (a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback off-by-default and fail-closed. The agent's chain reads distinguish "field unset" from "RPC failed", so a rate-limited upstream can never read as *kill-switch off* — the agent holds instead of acting on fabricated state, and the dashboard flags the data as stale.
 
-**Coverage:** 43 contract tests + 86 backend tests + 12 dashboard view-logic specs, with regression coverage for each fix — all gated in CI (including the contract suite). Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
+**Coverage:** 47 contract tests + 107 backend tests + 22 dashboard view-logic specs, with regression coverage for each fix — all gated in CI (including the contract suite). Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
+
+**Documented trust root:** the one authority above the contract — Casper package upgrade rights — is disclosed and analyzed in the [contract README](contracts/governed_vault/README.md#trust-root-package-upgrade-authority), together with the production mitigation (install from a separate, offline installer key).
 
 ## Run it
 
@@ -154,13 +170,54 @@ The agent's audit feed is **persisted** across restarts, and secrets are mounted
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    subgraph chain["CASPER 2.0 — trusted"]
+        vault["GovernedVault (Odra)<br/>funds in the contract's purse<br/>cap · allowlist · per-validator cap<br/>cooldown · pause · bond"]
+        auction["Native auction<br/>delegate / undelegate / redelegate"]
+        acct["Treasury account weighted keys<br/>agent below key_management"]
+    end
+    subgraph server["SERVER — untrusted"]
+        worker["AgentWorker tick loop (.NET)"]
+        monitor["ValidatorMonitor<br/>CSPR.cloud live metrics"]
+        policy["StakingPolicy<br/>published deterministic rules"]
+        x402["X402Client<br/>pay-to-think buyer"]
+    end
+    provider["x402 SignalProvider<br/>paid risk read — verifies the CSPR<br/>payment on-chain, replay-protected"]
+    owner["Owner's wallet (CSPR.click)<br/>co-sign · policy · kill-switch<br/>server never holds the key"]
+
+    monitor --> worker
+    policy --> worker
+    worker -->|"agent-signed tx — chain-bounded"| vault
+    vault --> auction
+    x402 -->|"pay CSPR"| provider
+    provider -->|"risk read"| x402
+    x402 --> worker
+    owner -->|"owner-signed tx"| vault
+    worker -. "no path to move CSPR out" .-x vault
+    linkStyle 8 stroke:#e5484d,color:#e5484d
+```
+
 - **Contracts** (`contracts/`) — Rust + Odra 2.7: the `GovernedVault` staking leash — delegate / undelegate / redelegate under a per-action cap, validator allowlist, per-validator cap, action cooldown, max-commission threshold, owner kill-switch, propose→approve material co-sign, a posted CSPR bond with on-chain violation log, owner-only withdraw, and owner emergency recall of staked CSPR. It is **upgraded in place** (Odra 2.7), so policy entry points were added across versions while the vault's state and purse were preserved.
 - **Backend** (`backend/`) — .NET 10 + Casper C# SDK: the autonomous agent loop (`AgentWorker`), the perception layer (`ValidatorMonitor`, CSPR.cloud), the on-chain client (`CasperVault`), and the x402 pay-to-think buyer + provider.
 - **Frontend** (`frontend/`) — Angular 20 + Tailwind dashboard, designed as an **institutional control console** (graphite/steel palette with red reserved for enforcement, self-hosted IBM Plex). One scrolling page: a hero "leash instrument" that reflects live **ARMED / AWAITING CO-SIGN / HALTED** state, a how-it-works + guarantee explainer, a short **walkthrough video**, a "Run your own" self-host section, and the live console — the **full leash state read live from chain** (per-action cap, free/total balance, slashable bond, per-validator cap, violations, and a prominent kill-switch banner when the owner pauses the agent), a live audit feed, the validator-policy view with the active commission threshold and per-validator committed stake, a **staking positions & rewards** page (the vault delegates from a contract purse, so it shows positions the block explorer can't), x402 spend, and the human co-sign action. From the same page the owner runs an **on-chain control panel** — set the cap, per-validator cap, cooldown and max-commission threshold, add/remove allowlisted validators, recall staked CSPR, withdraw, or hit the kill-switch — each one a transaction the owner **signs in their own wallet** via CSPR.click (the agent builds the *unsigned* transaction, the owner signs it in Casper Wallet in-browser, and the agent confirms the result on-chain). **The server holds only the owner's public key, never the secret.** (A server-key co-sign path exists for local dev but is **off by default**.) It re-syncs the snapshot on reconnect and surfaces a clear banner if the agent API is unreachable.
 
-## Status
+## Status & roadmap
 
-🚧 In active development for the **Casper Agentic Buildathon 2026** (submission due 2026-06-30). **Live end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com)** (auto-deployed from `main` via GitHub Actions), hardened across four rounds of adversarial security review, and covered by 43 contract + 86 backend tests plus 12 dashboard specs — all gated in CI. Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
+**Complete and live for the Casper Agentic Buildathon 2026 — Final Round.** Running end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com) (auto-deployed from `main` via GitHub Actions), hardened across four rounds of adversarial security review, and covered by **47 contract + 107 backend + 22 dashboard tests — all gated in CI**. Final-round hardening shipped the owner-tunable commission threshold, on-chain allowlist management from the wallet, validator-departure reconciliation (`owner_clear_committed` — an in-place contract upgrade with state and purse preserved), stranded-position detection, and CodeQL scanning.
+
+**Roadmap — from testnet proof to governed mainnet AUM:**
+
+| When | What |
+|---|---|
+| **Now (shipped)** | Bonded autonomous agent live under the chain-enforced leash on testnet · full owner console (wallet-signed policy, allowlist, kill-switch, recall) · x402 pay-to-think loop |
+| **Q3 2026** | Third-party audit of `GovernedVault` (~1,300 lines, fixed scope) · mainnet dry-run with our own treasury under tight caps · 1–2 design-partner pilots with a Casper exchange or custodian |
+| **Q4 2026** | Mainnet GA · bps-on-governed-AUM pilot pricing (see [Business model](#business-model)) |
+| **2027** | Multi-venue leash: the same cap / allowlist / co-sign / bond pattern over new Casper on-chain venues (DEX LPs, RWA vaults) as they ship |
+
+Mainnet is deliberately close: the agent's perception and chain layers already run against mainnet config — the step is **an audit and a config change, not a rewrite**.
+
+Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
 
 ## License
 

@@ -6,6 +6,23 @@ All releases from 0.7.0 are **in-place upgrades** (Odra 2.7) of the same deploye
 package — each new contract version preserves the vault's state and purse, so policy
 entry points were added without redeploying or moving funds.
 
+## [0.8.1] - 2026-07-06
+### Added
+- `owner_clear_committed(validator)` — owner reconciliation for a delegated validator
+  that **withdrew its bid and left the auction**: Casper force-returns the vault's
+  delegation, but the `committed` ledger keeps the old amount — a phantom position that
+  every exit path reverts on (`ValidatorNotFound` from the auction). This zeroes the
+  phantom entry with **no auction call and no fund movement** (the funds are already back
+  in the vault's purse). Owner-only, allowed while paused. Emits `CommittedCleared`.
+- Tests: 4 for `owner_clear_committed` — positive path incl. the `CommittedCleared`
+  event, owner-only gating, works-while-paused, idempotent-on-zero (47 total).
+### Notes
+- Shipped 2026-07-06 as an in-place upgrade of the deployed testnet package; state and
+  purse preserved. Alongside it, the agent stopped auto-escalating exits for inactive
+  validators (it emits a de-duped advisory and leaves recall/clear to the owner), and the
+  dashboard gained a "Clear stale committed" owner control with honest labels for
+  departed positions.
+
 ## [0.8.0] - 2026-06-24
 ### Added
 - `set_max_commission(percent)` — owner sets the max-commission threshold the agent

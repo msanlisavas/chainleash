@@ -31,7 +31,10 @@ executing it — works even while paused), `raise_cap`, `set_validator`, `set_pa
 (kill-switch), `set_max_per_validator`, `set_action_interval`, `set_max_commission`
 (the agent's max-commission policy threshold), `owner_undelegate` / `owner_redelegate`
 (emergency recall of staked CSPR — unbounded full-exit escape hatch, allowed while
-paused), `record_violation`, `slash_bond`, `return_bond`, `withdraw`,
+paused), `owner_clear_committed` (reconcile a validator that **left the auction**: zeroes
+the phantom `committed` ledger entry with no auction call and no fund movement — the
+delegation was already force-returned to the vault's purse; allowed while paused, emits
+`CommittedCleared`), `record_violation`, `slash_bond`, `return_bond`, `withdraw`,
 `transfer_ownership`, `set_agent`.
 
 **Installer:** `init` (constructor, auto), `initialize(agent, owner, value_cap)` —
@@ -75,12 +78,26 @@ reserves 64536+ for its own framework errors, e.g. 64658 = MissingArg.)
 Linux container (see the [RUNBOOK](../../RUNBOOK.md)):
 
 ```
-cargo test               # 43/43
-cargo odra build         # -> wasm/GovernedVault.wasm (~295 KB)
+cargo test               # 47/47
+cargo odra build         # -> wasm/GovernedVault.wasm (~357 KB)
 ```
 
 Deploy is via the C# SDK (`SessionBuilder.Wasm(...).InstallOrUpgrade()`); `initialize` is
 called separately after install. The contract is **upgraded in place** (Odra 2.7) — a new
 contract version under the same package preserves the vault's state and purse, so policy
-entry points (owner recall, the commission threshold) were added without redeploying or
-moving funds. See the RUNBOOK and `scripts/onboard.ps1`.
+entry points (owner recall, the commission threshold, `owner_clear_committed`) were added
+without redeploying or moving funds. See the RUNBOOK and `scripts/onboard.ps1`.
+
+### Trust root: package upgrade authority
+
+The leash governs the **agent role inside the vault**. One authority sits above the
+contract: whoever can add a contract version to the Casper package can replace the leash
+logic itself. In this testnet deployment the package was installed from the treasury
+account, so upgrade authority rides on that account's *deployment* threshold (the
+weighted-keys layer raises `key_management` above the agent's weight, but routine
+deployment stays agent-reachable by design). A production rollout should install the
+package from a **separate, offline installer key** — then no key the agent process holds
+can touch the contract code, extending the same separation the weighted-keys layer
+already enforces for account authority. We state this explicitly rather than leave it
+implicit: it is the one place the demo deployment trades separation for a
+single-faucet-account setup, and the fix is deployment procedure, not contract code.
