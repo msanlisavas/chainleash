@@ -94,7 +94,7 @@ Most "AI agent × money" projects put a model in the custody path and hope it be
 ```
 
 - **The paid risk read is real inference — when you want it to be.** With `ANTHROPIC_API_KEY` set, the x402 provider runs **Claude over the live validator metrics** and returns a verdict with a rationale, streamed into the audit feed — you watch what the payment bought. The deterministic rule stays the floor: the model can **raise** risk to `elevated` (forcing a human co-sign) but can never lower it, and any model failure degrades to the pure rule read. AI adds caution; it cannot remove it. The layer is **optional by construction** — the public demo deliberately runs the floor alone, because a model here is a capability, never a dependency. Flip the env var (`.env.example` documents it) and the same settled payment buys inference.
-- **Any AI can supervise the vault — none can touch it.** The [CHAINLEASH MCP server](backend/ChainLeash.Mcp) exposes the live leash to any MCP client (Claude Desktop, Claude Code, …): state, positions, validators, pending co-signs, and `prepare_owner_action`, which returns the **unsigned** transaction for an owner move. An AI can *prepare* the kill-switch; only the owner's wallet can *sign* it. That is the leash, as an MCP tool. A shipped [Agent Skill](.claude/skills/chainleash-vault/SKILL.md) teaches any Claude instance to operate and onboard vaults.
+- **Any AI can supervise the vault — none can touch it.** The [CHAINLEASH MCP server](backend/ChainLeash.Mcp) exposes the live leash to any MCP client (Claude Desktop, Claude Code, …): state, positions, validators, pending co-signs, and `prepare_owner_action`, which returns the **unsigned** transaction for an owner move. An AI can *prepare* the kill-switch; only the owner's wallet can *sign* it. That is the leash, as an MCP tool. A shipped [Agent Skill](skills/chainleash-vault/SKILL.md) teaches any Claude instance to operate and onboard vaults (drop it into `.claude/skills/` to install).
 - **The custody layer is deliberately model-free.** Institutions need automation that executes a published rule auditably — so the decision cascade ([`StakingPolicy`](backend/ChainLeash.Agent/StakingPolicy.cs)) is pure, deterministic, and unit-tested, and the chain would bound even a malicious replacement of it.
 
 **Point your AI at the leash** (works against the live deployment, read-only by design):
@@ -110,7 +110,7 @@ claude mcp add chainleash -- dotnet run --project backend/ChainLeash.Mcp
 |---|---|---|
 | **x402 micropayments** | Buyer ([`X402Client`](backend/ChainLeash.Agent/X402Client.cs)) pays per risk read, settlement-verified; seller ([`SignalProvider`](backend/ChainLeash.SignalProvider)) verifies the payment on-chain, replay-protected — and serves **LLM inference** when a model key is configured | [on-chain payment](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
 | **MCP servers** | [CHAINLEASH MCP server](backend/ChainLeash.Mcp) — 7 tools over the live vault; built by the maintainer of the [Casper MCP Server](https://github.com/msanlisavas/casper-mcp) from Casper's own AI Toolkit | `tools/list` against the live API |
-| **Agent Skills** | [`chainleash-vault`](.claude/skills/chainleash-vault/SKILL.md) skill ships in-repo — operate, supervise, onboard | this repo |
+| **Agent Skills** | [`chainleash-vault`](skills/chainleash-vault/SKILL.md) skill ships in-repo — operate, supervise, onboard | this repo |
 | **CSPR.click** | Non-custodial wallet co-sign: the server builds unsigned txs, the owner signs in-browser — the server never holds the key | every owner action on the [live dashboard](https://chainleash.ekolsoft.com) |
 | **CSPR.cloud** | Perception ([`ValidatorMonitor`](backend/ChainLeash.Agent/ValidatorMonitor.cs)), x402 payment verification, staking views | live site telemetry |
 | **Odra** | The [`GovernedVault`](contracts/governed_vault) contract — in-place upgraded across 8 versions with state + purse preserved | [package](https://testnet.cspr.live/contract-package/612b07767d7e8245a8a2d2dfd77e56e34776e7be7ecf81b95429b092a30758e3) |
@@ -258,7 +258,7 @@ flowchart LR
 
 Mainnet is deliberately close: the agent's perception and chain layers already run against mainnet config — the step is **an audit and a config change, not a rewrite**.
 
-Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the [Casper MCP Server](https://github.com/msanlisavas/casper-mcp) featured in [Casper's AI Toolkit](https://www.casper.network/ai).
+Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the [Casper MCP Server](https://github.com/msanlisavas/casper-mcp) featured in [Casper's AI Toolkit](https://www.casper.network/ai). Follow the build on X: [@muratsanlisavas](https://x.com/muratsanlisavas) — dedicated project channels (X + Telegram) are coming.
 
 ## License
 

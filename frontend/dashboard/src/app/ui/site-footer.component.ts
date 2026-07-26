@@ -22,6 +22,13 @@ import { Component } from '@angular/core';
             </svg>
             GitHub
           </a>
+          <a href="https://x.com/muratsanlisavas" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1.5 hover:text-ink transition-colors">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M18.9 1.1h3.68l-8.04 9.19L24 22.85h-7.41l-5.8-7.58-6.64 7.58H.47l8.6-9.83L0 1.1h7.6l5.24 6.93L18.9 1.1Zm-1.29 19.5h2.04L6.49 3.18H4.3L17.61 20.6Z"/>
+            </svg>
+            X
+          </a>
           <a href="https://youtu.be/6_j26_2XpYA" target="_blank" rel="noopener"
              class="inline-flex items-center gap-1.5 hover:text-ink transition-colors">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

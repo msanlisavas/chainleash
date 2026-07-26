@@ -48,7 +48,3 @@ docs/superpowers/
 .claude/
 CLAUDE.md
 .claude-*
-# …except the shipped Agent Skill: any Claude instance can operate the vault with it
-!.claude/
-.claude/*
-!.claude/skills/

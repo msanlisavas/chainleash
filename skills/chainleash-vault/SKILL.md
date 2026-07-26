@@ -5,6 +5,10 @@ description: Operate, supervise, or onboard a CHAINLEASH GovernedVault — the c
 
 # Operating the CHAINLEASH leash
 
+> **Install as an Agent Skill:** copy this folder into your project's or home
+> `.claude/skills/` directory and Claude Code will load it automatically — or just
+> hand the file to any AI assistant as context.
+
 CHAINLEASH is a bonded autonomous staking agent whose authority is enforced **on-chain**
 (Casper 2.0 testnet), not by the server. Funds live in a `GovernedVault` contract; the
 agent can delegate/undelegate/redelegate within chain-enforced limits and can never
