@@ -174,6 +174,27 @@ else
 EOF
 fi
 
+# Docker path: the compose agent reads VAULT_PKG / OWNER_PUBKEY from .env only
+# (appsettings.local.json is dockerignored) — upsert them so `docker compose up`
+# really points at YOUR vault instead of silently signing against the demo vault.
+ENV_FILE="$ROOT/.env"
+if [ ! -f "$ENV_FILE" ] && [ -f "$ROOT/.env.example" ]; then cp "$ROOT/.env.example" "$ENV_FILE"; fi
+if [ -f "$ENV_FILE" ]; then
+  upsert_env() {
+    local key="$1" val="$2"
+    if grep -q "^${key}=" "$ENV_FILE"; then
+      awk -v k="$key" -v v="$val" 'index($0, k"=")==1{print k"="v; next} {print}' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
+    else
+      printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+    fi
+  }
+  upsert_env VAULT_PKG "$PKG"
+  [ -n "$OWNER" ] && upsert_env OWNER_PUBKEY "$OWNER"
+  ENV_NOTE="VAULT_PKG + OWNER_PUBKEY upserted into .env (docker compose reads .env)"
+else
+  ENV_NOTE="no .env(.example) found — for docker compose set VAULT_PKG=$PKG and OWNER_PUBKEY=$OWNER yourself"
+fi
+
 echo ""
 echo "✅ Vault live and armed."
 echo "   package : $PKG"
@@ -181,5 +202,7 @@ echo "   owner   : $OWNER"
 VCOUNT=0; [ -n "$VALIDATORS" ] && VCOUNT="$(printf '%s' "$VALIDATORS" | tr ',' '\n' | grep -c .)"
 echo "   cap     : $CAP CSPR/action   allowlist: $VCOUNT validator(s)"
 echo "   agent   : config written to $AGENT_CFG"
+echo "   docker  : $ENV_NOTE"
+echo "             driving your own x402 pair too? Also set X402_PAY_TO / X402_PROVIDER_PUBKEY / X402_EXPECTED_PAYER in .env."
 echo ""
-echo "Next: (cd backend/ChainLeash.Agent && dotnet run)  -> dashboard http://localhost:5179, health /health"
+echo "Next: docker compose up --build   (or: cd backend/ChainLeash.Agent && dotnet run)  -> dashboard http://localhost:5179"

@@ -117,8 +117,23 @@ if (-not $OwnerPublicKeyHex) {
   if (Test-Path $ownerFile) { $OwnerPublicKeyHex = (Get-Content $ownerFile -Raw).Trim() }
 }
 
+# PS 5.1-compatible deep convert (ConvertFrom-Json -AsHashtable is PowerShell 6+ only,
+# and powershell.exe is still the Windows default) — a re-run must not throw here.
+function ConvertTo-HashtableDeep($obj) {
+  if ($obj -is [System.Collections.IDictionary]) {
+    $h = @{}; foreach ($k in @($obj.Keys)) { $h[$k] = ConvertTo-HashtableDeep $obj[$k] }; return $h
+  }
+  if ($obj -is [System.Management.Automation.PSCustomObject]) {
+    $h = @{}; foreach ($p in $obj.PSObject.Properties) { $h[$p.Name] = ConvertTo-HashtableDeep $p.Value }; return $h
+  }
+  if ($obj -is [System.Collections.IEnumerable] -and $obj -isnot [string]) {
+    return @($obj | ForEach-Object { ConvertTo-HashtableDeep $_ })
+  }
+  return $obj
+}
+
 $cfg = @{}
-if (Test-Path $agentCfg) { $cfg = Get-Content $agentCfg -Raw | ConvertFrom-Json -AsHashtable }
+if (Test-Path $agentCfg) { $cfg = ConvertTo-HashtableDeep (Get-Content $agentCfg -Raw | ConvertFrom-Json) }
 if (-not $cfg.ContainsKey('Casper'))    { $cfg['Casper'] = @{} }
 if (-not $cfg.ContainsKey('Staking'))   { $cfg['Staking'] = @{} }
 if (-not $cfg.ContainsKey('Dashboard')) { $cfg['Dashboard'] = @{} }
@@ -134,11 +149,34 @@ if ($BondCspr -gt 0 -or -not $cfg['Staking'].ContainsKey('BondCspr')) { $cfg['St
 $cfg['Dashboard']['CsprClickAppId'] = $CsprClickAppId
 $cfg | ConvertTo-Json -Depth 8 | Set-Content $agentCfg -Encoding utf8
 
+# Docker path: the compose agent reads VAULT_PKG / OWNER_PUBKEY from .env only
+# (appsettings.local.json is dockerignored) — upsert them so `docker compose up`
+# really points at YOUR vault instead of silently signing against the demo vault.
+$envFile = Join-Path $root '.env'
+$envExample = Join-Path $root '.env.example'
+if (-not (Test-Path $envFile) -and (Test-Path $envExample)) { Copy-Item $envExample $envFile }
+$envNote = "no .env(.example) found — for docker compose set VAULT_PKG=$pkg and OWNER_PUBKEY=$OwnerPublicKeyHex yourself"
+if (Test-Path $envFile) {
+  function Set-EnvLine([string[]]$envLines, [string]$key, [string]$value) {
+    if ($envLines -match "^$key=") {
+      return @($envLines | ForEach-Object { if ($_ -match "^$key=") { "$key=$value" } else { $_ } })
+    }
+    return @($envLines) + "$key=$value"
+  }
+  $envLines = @(Get-Content $envFile)
+  $envLines = Set-EnvLine $envLines 'VAULT_PKG' $pkg
+  if ($OwnerPublicKeyHex) { $envLines = Set-EnvLine $envLines 'OWNER_PUBKEY' $OwnerPublicKeyHex }
+  Set-Content $envFile -Value $envLines -Encoding utf8
+  $envNote = 'VAULT_PKG + OWNER_PUBKEY upserted into .env (docker compose reads .env)'
+}
+
 Write-Host ""
 Write-Host "✅ Vault live and armed." -ForegroundColor Green
 Write-Host "   package : $pkg"
 Write-Host "   owner   : $OwnerPublicKeyHex"
 Write-Host "   cap     : $CapCspr CSPR/action   allowlist: $($Validators.Count) validator(s)"
 Write-Host "   agent   : config written to $agentCfg"
+Write-Host "   docker  : $envNote"
+Write-Host "             driving your own x402 pair too? Also set X402_PAY_TO / X402_PROVIDER_PUBKEY / X402_EXPECTED_PAYER in .env."
 Write-Host ""
-Write-Host "Next: cd backend/ChainLeash.Agent && dotnet run   (dashboard at http://localhost:5179, health at /health)"
+Write-Host "Next: docker compose up --build   (or: cd backend/ChainLeash.Agent && dotnet run)  -> dashboard http://localhost:5179"

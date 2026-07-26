@@ -80,10 +80,12 @@ docker run --rm -v "$PWD/contracts/governed_vault:/work" \
 ```
 
 This deploys a fresh `GovernedVault`, initializes it (agent + owner + cap), arms the
-validator allowlist on-chain, optionally funds it and posts the bond, then writes the
-new package hash + allowlist into `backend/ChainLeash.Agent/appsettings.local.json` so
-the agent points at it. Pick active validators from CSPR.cloud
-(`GET /validators?era_id=<current>`).
+validator allowlist on-chain, optionally funds it and posts the bond, then points the
+agent at it **twice**: the package hash + allowlist go into
+`backend/ChainLeash.Agent/appsettings.local.json` (the `dotnet run` path), and
+`VAULT_PKG` / `OWNER_PUBKEY` are upserted into `.env` (the `docker compose` path —
+compose can't see `appsettings.local.json`, it's dockerignored). Pick active validators
+from CSPR.cloud (`GET /validators?era_id=<current>`).
 
 ### Manual equivalent (spike harness)
 
