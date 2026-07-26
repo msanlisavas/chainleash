@@ -170,7 +170,7 @@ CHAINLEASH has been hardened through four rounds of **adversarial security revie
 
 **Off-chain hardening:** the API locks CORS to the dashboard origin, serves strict security headers (CSP included), rate-limits the public endpoints in two lanes (cheap reads vs. chain-polling co-sign), makes the co-sign confirm single-use and fail-closed (a leaked co-sign tx hash can't forge an audit entry), and keeps the dev server-key fallback off-by-default and fail-closed. The agent's chain reads distinguish "field unset" from "RPC failed", so a rate-limited upstream can never read as *kill-switch off* — the agent holds instead of acting on fabricated state, and the dashboard flags the data as stale.
 
-**Coverage:** 47 contract tests + 107 backend tests + 22 dashboard view-logic specs, with regression coverage for each fix — all gated in CI (including the contract suite). Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
+**Coverage:** 56 contract tests + 107 backend tests + 22 dashboard view-logic specs, with regression coverage for each fix — all gated in CI (including the contract suite). Earlier iterations also demonstrated on-chain autonomous policy-breach exit, non-allowlisted rejection, and a blocked weighted-key over-reach attempt.
 
 **Documented trust root:** the one authority above the contract — Casper package upgrade rights — is disclosed and analyzed in the [contract README](contracts/governed_vault/README.md#trust-root-package-upgrade-authority), together with the production mitigation (install from a separate, offline installer key).
 
@@ -245,7 +245,7 @@ flowchart LR
 
 ## Status & roadmap
 
-**Complete and live for the Casper Agentic Buildathon 2026 — Final Round.** Running end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com) (auto-deployed from `main` via GitHub Actions), hardened across four rounds of adversarial security review, and covered by **47 contract + 107 backend + 22 dashboard tests — all gated in CI**. Final-round hardening shipped the owner-tunable commission threshold, on-chain allowlist management from the wallet, validator-departure reconciliation (`owner_clear_committed` — an in-place contract upgrade with state and purse preserved), stranded-position detection, and CodeQL scanning.
+**Complete and live for the Casper Agentic Buildathon 2026 — Final Round.** Running end-to-end on Casper 2.0 testnet at [chainleash.ekolsoft.com](https://chainleash.ekolsoft.com) (auto-deployed from `main` via GitHub Actions), hardened across four rounds of adversarial security review, and covered by **56 contract + 107 backend + 22 dashboard tests — all gated in CI**. Final-round hardening shipped the owner-tunable commission threshold, on-chain allowlist management from the wallet, validator-departure reconciliation (`owner_clear_committed` — an in-place contract upgrade with state and purse preserved), stranded-position detection, and CodeQL scanning.
 
 **Roadmap — from testnet proof to governed mainnet AUM:**
 

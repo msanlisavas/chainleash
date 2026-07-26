@@ -60,7 +60,7 @@ agent's payments.
 docker build -t chainleash-odra tools/odra-build
 docker run --rm -v "$PWD/contracts/governed_vault:/work" \
   -v chainleash-cargo-registry:/usr/local/cargo/registry chainleash-odra \
-  bash /work/deploy.sh        # cargo test (47/47) + cargo odra build -> wasm/GovernedVault.wasm
+  bash /work/deploy.sh        # cargo test (56/56) + cargo odra build -> wasm/GovernedVault.wasm
 ```
 
 ## 2. Deploy + arm your own vault — one command
@@ -260,7 +260,7 @@ clear is for a validator that fully left the auction).
 ```bash
 dotnet test backend/ChainLeash.Tests/ChainLeash.Tests.csproj   # leash policy + decoders + co-sign verifier (107)
 cd frontend/dashboard && npm run test:ci                       # dashboard view-logic (22, headless)
-# contract suite (47) runs in the chainleash-odra container — see section 1
+# contract suite (56) runs in the chainleash-odra container — see section 1
 ```
 
 CI (`.github/workflows/ci.yml`) runs the backend, frontend, and contract suites on every push/PR.

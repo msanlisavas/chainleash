@@ -78,7 +78,7 @@ reserves 64536+ for its own framework errors, e.g. 64658 = MissingArg.)
 Linux container (see the [RUNBOOK](../../RUNBOOK.md)):
 
 ```
-cargo test               # 47/47
+cargo test               # 56/56
 cargo odra build         # -> wasm/GovernedVault.wasm (~357 KB)
 ```
 
