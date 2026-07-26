@@ -64,7 +64,7 @@ Staking is Casper's deep native on-chain venue today, so staking is the proof. A
 
 Incumbents (Coinbase Agentic Wallets, AWS Bedrock AgentCore) enforce agent spend limits **off-chain inside an enclave** — the security of the money equals the security of the server. CHAINLEASH makes the limit a **protocol + contract** guarantee: cap, allowlist, and owner-only withdraw are all enforced on-chain.
 
-It pairs that guarantee with an agent that **pays to think.** Before acting, the agent buys a premium risk read over Casper-native **x402** — a real CSPR settlement the provider **verifies on-chain** (recipient, amount, finality) and refuses to accept twice (replay-protected). The read itself is derived from **live validator metrics**, not mock data. And when the policy is satisfied and nothing is off-policy, the agent **chooses not to act at all** — restraint as a first-class behavior.
+It pairs that guarantee with an agent that **pays to think — literally.** Before acting, the agent buys a premium risk read over Casper-native **x402** — a real CSPR settlement the provider **verifies on-chain** (recipient, amount, finality) and refuses to accept twice (replay-protected). The read is **Claude inference over live validator metrics** (with a deterministic rule floor the model can tighten but never loosen — see [Where the AI sits](#where-the-ai-sits--the-two-layer-agentic-architecture)), and the model's rationale streams into the live audit feed. And when the policy is satisfied and nothing is off-policy, the agent **chooses not to act at all** — restraint as a first-class behavior.
 
 ## How the agent works
 
@@ -72,11 +72,48 @@ Each tick, the agent:
 
 1. **Perceives** the allowlisted validators via live CSPR.cloud metrics (commission, active status, stake).
 2. **Scores** them against the **published delegation policy** (must be active, commission at or below the owner-set threshold) — and the owner can retune that threshold on-chain from the dashboard at any time.
-3. **Pays to think** — if there's an actionable opportunity, it buys a premium risk read over x402.
+3. **Pays to think** — if there's an actionable opportunity, it buys a premium risk read over x402 (real Claude inference over the live metrics; the model's paid rationale streams into the audit feed).
 4. **Acts within the leash** — deploys idle treasury to the lowest-commission compliant validator (routine, ≤ cap); when a delegated validator breaches policy (e.g. a commission hike), it **redelegates** that stake straight to the best compliant validator in one native tx; over-cap or elevated-risk moves are escalated to a human-co-signed proposal.
 5. **Or chooses not to act** — restraint as intelligence. When the policy is satisfied and nothing is off-policy, the agent stays put.
 
 Institutions want an agent that *executes a published rule auditably*, not one that exercises opaque discretion — so the policy is deterministic and every decision is recorded on-chain.
+
+## Where the AI sits — the two-layer agentic architecture
+
+Most "AI agent × money" projects put a model in the custody path and hope it behaves. CHAINLEASH inverts that — **AI thinks outside the leash; deterministic, published rules execute inside it; the chain enforces; a human co-signs**:
+
+```
+[ LLM risk oracle — paid per read over x402 ]   [ MCP server + Agent Skill — any AI supervises ]
+                    │ advisory only — can TIGHTEN, never loosen │
+                    ▼
+        [ deterministic policy engine — published, auditable rules ]
+                    ▼
+        [ on-chain leash — caps · allowlist · cooldown · kill-switch · bond ]
+                    ▼
+        [ human owner — co-signs material moves in their own wallet ]
+```
+
+- **The paid risk read is real inference.** When the agent pays CSPR over x402 for the premium read, the provider runs **Claude over the live validator metrics** and returns a verdict with a rationale — streamed into the live audit feed, so you watch what the payment bought. The deterministic rule stays the floor: the model can **raise** risk to `elevated` (forcing a human co-sign) but can never lower it, and any model failure degrades to the pure rule read. AI adds caution; it cannot remove it.
+- **Any AI can supervise the vault — none can touch it.** The [CHAINLEASH MCP server](backend/ChainLeash.Mcp) exposes the live leash to any MCP client (Claude Desktop, Claude Code, …): state, positions, validators, pending co-signs, and `prepare_owner_action`, which returns the **unsigned** transaction for an owner move. An AI can *prepare* the kill-switch; only the owner's wallet can *sign* it. That is the leash, as an MCP tool. A shipped [Agent Skill](.claude/skills/chainleash-vault/SKILL.md) teaches any Claude instance to operate and onboard vaults.
+- **The custody layer is deliberately model-free.** Institutions need automation that executes a published rule auditably — so the decision cascade ([`StakingPolicy`](backend/ChainLeash.Agent/StakingPolicy.cs)) is pure, deterministic, and unit-tested, and the chain would bound even a malicious replacement of it.
+
+**Point your AI at the leash** (works against the live deployment, read-only by design):
+
+```bash
+claude mcp add chainleash -- dotnet run --project backend/ChainLeash.Mcp
+# then ask: "Is the vault paused, and what did the agent do in the last hour?"
+```
+
+### Casper AI Toolkit coverage
+
+| Toolkit pillar | Where CHAINLEASH uses it | Proof |
+|---|---|---|
+| **x402 micropayments** | Buyer ([`X402Client`](backend/ChainLeash.Agent/X402Client.cs)) pays per risk read, settlement-verified; seller ([`SignalProvider`](backend/ChainLeash.SignalProvider)) verifies the payment on-chain, replay-protected — and serves **LLM inference** | [on-chain payment](https://testnet.cspr.live/transaction/cd85af4c07517d353f87ab3a7cfd0243ad11d5b248e117964283f1f815339943) |
+| **MCP servers** | [CHAINLEASH MCP server](backend/ChainLeash.Mcp) — 7 tools over the live vault; built by the maintainer of the [Casper MCP Server](https://github.com/msanlisavas/casper-mcp) from Casper's own AI Toolkit | `tools/list` against the live API |
+| **Agent Skills** | [`chainleash-vault`](.claude/skills/chainleash-vault/SKILL.md) skill ships in-repo — operate, supervise, onboard | this repo |
+| **CSPR.click** | Non-custodial wallet co-sign: the server builds unsigned txs, the owner signs in-browser — the server never holds the key | every owner action on the [live dashboard](https://chainleash.ekolsoft.com) |
+| **CSPR.cloud** | Perception ([`ValidatorMonitor`](backend/ChainLeash.Agent/ValidatorMonitor.cs)), x402 payment verification, staking views | live site telemetry |
+| **Odra** | The [`GovernedVault`](contracts/governed_vault) contract — in-place upgraded across 8 versions with state + purse preserved | [package](https://testnet.cspr.live/contract-package/612b07767d7e8245a8a2d2dfd77e56e34776e7be7ecf81b95429b092a30758e3) |
 
 ## Business model
 
@@ -217,7 +254,7 @@ flowchart LR
 
 Mainnet is deliberately close: the agent's perception and chain layers already run against mainnet config — the step is **an audit and a config change, not a rewrite**.
 
-Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the Casper MCP Server.
+Built by [@msanlisavas](https://github.com/msanlisavas), maintainer of the [Casper MCP Server](https://github.com/msanlisavas/casper-mcp) featured in [Casper's AI Toolkit](https://www.casper.network/ai).
 
 ## License
 
