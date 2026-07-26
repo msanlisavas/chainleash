@@ -39,7 +39,10 @@ public sealed class X402Client
     /// True when no agent key / provider pubkey is configured — pay-to-think is unavailable.
     public bool Disabled => _agentKp is null || _providerPk is null;
 
-    public sealed record Signal(double Rate, string Risk, string SettlementHash, ulong PaidMotes);
+    /// Rationale/Source are optional (older providers omit them): Source is "model" when the
+    /// provider ran LLM inference over the live metrics, "rules" for the deterministic read.
+    public sealed record Signal(double Rate, string Risk, string SettlementHash, ulong PaidMotes,
+        string? Rationale = null, string? Source = null);
 
     /// Buy the premium risk read for a specific candidate validator (so the signal is a
     /// real, relevant read). Pays over x402 and only returns once the payment has settled.
@@ -55,7 +58,7 @@ public sealed class X402Client
         if (first.StatusCode != HttpStatusCode.PaymentRequired)
         {
             var open = await first.Content.ReadFromJsonAsync<RateDto>(ct);
-            return new Signal(open!.rate, open.risk, "", 0);
+            return new Signal(open!.rate, open.risk, "", 0, open.rationale, open.source);
         }
 
         var ch = await first.Content.ReadFromJsonAsync<ChallengeDto>();
@@ -115,7 +118,7 @@ public sealed class X402Client
             if (second.IsSuccessStatusCode)
             {
                 var dto = await second.Content.ReadFromJsonAsync<RateDto>(ct);
-                return new Signal(dto!.rate, dto.risk, pay.Hash, amount);
+                return new Signal(dto!.rate, dto.risk, pay.Hash, amount, dto.rationale, dto.source);
             }
             if (attempt >= 4)
                 throw new X402StrandedPaymentException(amount, pay.Hash,
@@ -138,7 +141,8 @@ public sealed class X402Client
     }
 
     private sealed record ChallengeDto(string scheme, string payTo, string maxAmountRequired);
-    private sealed record RateDto(double rate, string risk, string? paidWith);
+    private sealed record RateDto(double rate, string risk, string? paidWith,
+        string? rationale = null, string? source = null);
 }
 
 /// The payment SETTLED on-chain but the provider never served the signal — the CSPR is

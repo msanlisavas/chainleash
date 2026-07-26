@@ -20,6 +20,10 @@ services:
       # bind payment proofs to YOUR agent's account hash when driving your own vault
       - X402__ExpectedPayerAccountHash=${X402_EXPECTED_PAYER:-11b5fdcc0b9653c5d67891c675d1548193779b7ff0a9c942c03f7e6752b52aeb}
       - X402__PriceMotes=${X402_PRICE_MOTES:-2500000000}
+      # optional: with an Anthropic key, the paid risk read is REAL LLM inference over the
+      # live metrics (rule floor still enforced); empty = deterministic rules, unchanged
+      - X402__AnthropicApiKey=${ANTHROPIC_API_KEY:-}
+      - X402__AnthropicModel=${ANTHROPIC_MODEL:-claude-opus-5}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:5080/ >/dev/null"]
       interval: 30s

@@ -9,7 +9,10 @@
 
 using System.Collections.Concurrent;
 using System.Numerics;
+using System.Text.Json;
 using System.Threading.RateLimiting;
+using Anthropic;
+using Anthropic.Models.Messages;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.local.json", optional: true);
@@ -37,6 +40,15 @@ var apiKey = cfg["X402:CsprCloudAccessKey"] ?? cfg["Casper:CsprCloudAccessKey"] 
 
 var http = new HttpClient { BaseAddress = new Uri(apiBase + "/"), Timeout = TimeSpan.FromSeconds(30) };
 if (!string.IsNullOrWhiteSpace(apiKey)) http.DefaultRequestHeaders.Add("Authorization", apiKey);
+
+// Pay-to-think, literally: with an Anthropic key configured, the paid risk read is REAL
+// LLM inference over the live metrics (Claude reads the raw validator + auction data and
+// returns a verdict with a rationale). The model can only TIGHTEN the verdict, never
+// loosen it — the deterministic rule stays the floor, so a model outage, timeout, or
+// refusal degrades to exactly the pre-LLM behavior. No key = rule-based read, unchanged.
+var anthropicKey = cfg["X402:AnthropicApiKey"] ?? cfg["ANTHROPIC_API_KEY"];
+var anthropicModel = cfg["X402:AnthropicModel"] ?? "claude-opus-5";
+AnthropicClient? claude = string.IsNullOrWhiteSpace(anthropicKey) ? null : new AnthropicClient { ApiKey = anthropicKey };
 // Replay protection: each proof spends exactly once. The claim is made ATOMICALLY before
 // verification (TryAdd) and released only if verification fails, so two concurrent
 // requests with the same hash can never both be served. FIFO-bounded: garbage hashes
@@ -90,16 +102,71 @@ async Task<bool> VerifyPayment(string hash)
     catch { return false; }
 }
 
+// LLM half of the paid read: hand the raw metrics to Claude and get {risk, rationale}
+// back as structured output. The rule verdict is the FLOOR — the model may raise "low"
+// to "elevated" (more human oversight) but can never lower "elevated" to "low". Any
+// failure (no key, timeout, refusal, bad output) returns the rule verdict unchanged.
+async Task<(string risk, string? rationale, string source)> ModelRisk(string metricsSummary, string ruleRisk)
+{
+    if (claude is null) return (ruleRisk, null, "rules");
+    try
+    {
+        var response = await claude.Messages.Create(new MessageCreateParams
+        {
+            Model = anthropicModel,
+            MaxTokens = 4096,
+            OutputConfig = new OutputConfig
+            {
+                Effort = Effort.Low, // latency-sensitive paid endpoint; the task is small
+                Format = new JsonOutputFormat
+                {
+                    Schema = new Dictionary<string, JsonElement>
+                    {
+                        ["type"] = JsonSerializer.SerializeToElement("object"),
+                        ["properties"] = JsonSerializer.SerializeToElement(new
+                        {
+                            risk = new { type = "string", @enum = new[] { "low", "elevated" } },
+                            rationale = new { type = "string", description = "One or two short sentences justifying the verdict from the metrics given." },
+                        }),
+                        ["required"] = JsonSerializer.SerializeToElement(new[] { "risk", "rationale" }),
+                        ["additionalProperties"] = JsonSerializer.SerializeToElement(false),
+                    },
+                },
+            },
+            System = "You are the paid risk oracle for CHAINLEASH, a chain-enforced leash for an autonomous CSPR staking agent on Casper. " +
+                     "Given live validator/auction metrics, judge the risk of the agent delegating treasury CSPR right now. " +
+                     "A verdict of 'elevated' forces the move to be co-signed by a human owner; 'low' lets the agent proceed within its on-chain caps. " +
+                     "Consider commission level and trend, active status, stake concentration, delegator count, and network health. Be conservative: prefer 'elevated' when metrics look unusual.",
+            Messages = [new() { Role = Role.User, Content = metricsSummary }],
+        }).WaitAsync(TimeSpan.FromSeconds(20));
+        if (response.StopReason?.ToString()?.Contains("refusal", StringComparison.OrdinalIgnoreCase) == true) return (ruleRisk, null, "rules");
+        var text = response.Content.Select(b => b.Value).OfType<TextBlock>().FirstOrDefault()?.Text;
+        if (string.IsNullOrWhiteSpace(text)) return (ruleRisk, null, "rules");
+        using var doc = JsonDocument.Parse(text);
+        var modelRisk = doc.RootElement.GetProperty("risk").GetString();
+        var rationale = doc.RootElement.TryGetProperty("rationale", out var r) ? r.GetString() : null;
+        if (modelRisk is not ("low" or "elevated")) return (ruleRisk, null, "rules");
+        // Tighten-only merge: elevated wins from either side.
+        var merged = (ruleRisk == "elevated" || modelRisk == "elevated") ? "elevated" : "low";
+        rationale = rationale?.ReplaceLineEndings(" ").Trim();
+        if (rationale?.Length > 300) rationale = rationale[..300] + "…";
+        return (merged, rationale, "model");
+    }
+    catch { return (ruleRisk, null, "rules"); } // model unavailable → identical pre-LLM behavior
+}
+
 // A real, validator-derived risk read. If the caller names the validator it's about to
 // act on (?validator=<hex>), score that validator's live commission/active status; else
-// fall back to a network-health read from the auction metrics.
-async Task<(double rate, string risk)> Signal(string? validator)
+// fall back to a network-health read from the auction metrics. With an Anthropic key,
+// the read is model-driven on top of the same live data (see ModelRisk above).
+async Task<(double rate, string risk, string? rationale, string source)> Signal(string? validator)
 {
     try
     {
+        var metrics = (await http.GetFromJsonAsync<System.Text.Json.JsonElement>("auction-metrics")).GetProperty("data");
         if (!string.IsNullOrWhiteSpace(validator))
         {
-            var era = (await http.GetFromJsonAsync<System.Text.Json.JsonElement>("auction-metrics")).GetProperty("data").GetProperty("current_era_id").GetInt64();
+            var era = metrics.GetProperty("current_era_id").GetInt64();
             for (var page = 1; page <= 10; page++) // paginate: the era set can exceed one page
             {
                 using var v = await http.GetAsync($"validators?era_id={era}&page={page}&page_size=100");
@@ -110,24 +177,34 @@ async Task<(double rate, string risk)> Signal(string? validator)
                     {
                         var fee = val.TryGetProperty("fee", out var f) && f.ValueKind == System.Text.Json.JsonValueKind.Number ? f.GetInt32() : 0;
                         var active = val.TryGetProperty("is_active", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.True;
-                        // Elevated when commission is high or the validator isn't active this era.
-                        return (fee, (!active || fee > 8) ? "elevated" : "low");
+                        // Rule floor: elevated when commission is high or the validator isn't active this era.
+                        var ruleRisk = (!active || fee > 8) ? "elevated" : "low";
+                        var (risk, rationale, source) = await ModelRisk(
+                            $"The agent is about to delegate to validator {validator} (era {era}). Live validator record: {val.GetRawText()}. Network auction metrics: {metrics.GetRawText()}",
+                            ruleRisk);
+                        return (fee, risk, rationale, source);
                     }
                 }
                 var pageCount = vDoc.RootElement.TryGetProperty("page_count", out var pc) && pc.ValueKind == System.Text.Json.JsonValueKind.Number
                     ? pc.GetInt32() : 1;
                 if (page >= pageCount) break;
             }
-            return (0, "elevated"); // not in the active set this era → elevated
+            return (0, "elevated", "validator is not in the active set this era", "rules");
         }
-        var m = (await http.GetFromJsonAsync<System.Text.Json.JsonElement>("auction-metrics")).GetProperty("data");
-        var activeN = m.GetProperty("active_validator_number").GetInt32();
-        return (activeN, activeN < 20 ? "elevated" : "low"); // thin active set → elevated
+        var activeN = metrics.GetProperty("active_validator_number").GetInt32();
+        {
+            var ruleRisk = activeN < 20 ? "elevated" : "low"; // thin active set → elevated
+            var (risk, rationale, source) = await ModelRisk(
+                $"Network-health read (no specific validator). Live Casper auction metrics: {metrics.GetRawText()}",
+                ruleRisk);
+            return (activeN, risk, rationale, source);
+        }
     }
-    catch { return (0, "elevated"); } // on data failure, be conservative
+    catch { return (0, "elevated", null, "rules"); } // on data failure, be conservative
 }
 
-app.MapGet("/", () => "CHAINLEASH x402 signal provider. GET /rate (HTTP 402 until a verified CSPR payment).");
+app.MapGet("/", () => "CHAINLEASH x402 signal provider. GET /rate (HTTP 402 until a verified CSPR payment). " +
+    (claude is null ? "Risk read: deterministic rules (no ANTHROPIC key configured)." : $"Risk read: {anthropicModel} inference over live metrics, rule floor enforced."));
 
 app.MapGet("/rate", async (HttpContext ctx) =>
 {
@@ -145,8 +222,8 @@ app.MapGet("/rate", async (HttpContext ctx) =>
         return Challenge();
     }
 
-    var (rate, risk) = await Signal(ctx.Request.Query["validator"]);
-    return Results.Json(new { rate, risk, paidWith = proof });
+    var (rate, risk, rationale, source) = await Signal(ctx.Request.Query["validator"]);
+    return Results.Json(new { rate, risk, rationale, source, paidWith = proof });
 }).RequireRateLimiting("rate");
 
 app.Run();

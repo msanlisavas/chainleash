@@ -250,7 +250,12 @@ public sealed class AgentWorker : BackgroundService
                 _feed.State.Buys = _buys;
                 _feed.State.X402SpentCspr += (decimal)sig.PaidMotes / 1_000_000_000m;
                 var hash = string.IsNullOrEmpty(sig.SettlementHash) ? null : sig.SettlementHash;
-                await Emit("PAY", $"Paid {sig.PaidMotes / 1e9:F2} CSPR over x402 for the premium risk read → risk {sig.Risk}.",
+                // When the provider ran real inference (Source == "model"), stream the model's
+                // rationale into the audit feed — the "thinking" the payment bought, visible live.
+                var why = sig.Source == "model" && !string.IsNullOrWhiteSpace(sig.Rationale)
+                    ? $" AI rationale: {sig.Rationale.ReplaceLineEndings(" ").Trim()}"
+                    : "";
+                await Emit("PAY", $"Paid {sig.PaidMotes / 1e9:F2} CSPR over x402 for the premium risk read → risk {sig.Risk}.{why}",
                     amountCspr: (decimal)sig.PaidMotes / 1_000_000_000m, txHash: hash);
                 escalate = sig.Risk == "elevated";
             }
